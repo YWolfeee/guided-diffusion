@@ -69,9 +69,10 @@ def main():
     all_labels = []
     while len(all_images) * args.batch_size < args.num_samples:
         model_kwargs = {}
-        classes = th.randint(
-            low=0, high=NUM_CLASSES, size=(args.batch_size,), device=dist_util.dev()
-        )
+        # classes = th.randint(
+        #     low=0, high=NUM_CLASSES, size=(args.batch_size,), device=dist_util.dev()
+        # )
+        classes = 94 * th.ones((args.batch_size,), device=dist_util.dev(), dtype=th.int)
         model_kwargs["y"] = classes
         sample_fn = (
             diffusion.p_sample_loop if not args.use_ddim else diffusion.ddim_sample_loop

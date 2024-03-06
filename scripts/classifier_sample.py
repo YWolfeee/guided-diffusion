@@ -27,7 +27,7 @@ def main():
     args = create_argparser().parse_args()
 
     dist_util.setup_dist()
-    logger.configure()
+    logger.configure(dir=args.log_dir)
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(
@@ -83,6 +83,7 @@ def main():
             model_kwargs=model_kwargs,
             cond_fn=cond_fn,
             device=dist_util.dev(),
+            progress=True,
         )
         sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
         sample = sample.permute(0, 2, 3, 1)
@@ -105,10 +106,33 @@ def main():
         out_path = os.path.join(logger.get_dir(), f"samples_{shape_str}.npz")
         logger.log(f"saving to {out_path}")
         np.savez(out_path, arr, label_arr)
+        save_images(arr, out_path.replace('.npz', '.png'))
 
     dist.barrier()
     logger.log("sampling complete")
 
+def save_images(images: np.ndarray, 
+                path_name: str, 
+                labels=None,
+                dpi: int=300,
+                ):
+    from PIL import Image
+    import math
+    from matplotlib import pyplot as plt
+    
+    images = [Image.fromarray(image) for image in images]
+    images = images[:min(64, len(images))]
+    length = math.ceil(math.sqrt(len(images)))
+    fig, axs = plt.subplots(length, length, figsize=(16, 16))
+    for i in range(length):
+        for j in range(length):
+            if i*length+j >= len(images):
+                continue
+            axs[i, j].imshow(images[i*length+j])
+            if labels is not None:
+                axs[i, j].set_title(int(labels[i*length+j].item()))
+            axs[i, j].set_axis_off()
+    fig.savefig(path_name, dpi=dpi, bbox_inches='tight')
 
 def create_argparser():
     defaults = dict(
@@ -117,8 +141,10 @@ def create_argparser():
         batch_size=16,
         use_ddim=False,
         model_path="",
+        log_dir="tmp",
         classifier_path="",
         classifier_scale=1.0,
+        
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(classifier_defaults())

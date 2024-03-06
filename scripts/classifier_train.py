@@ -29,7 +29,7 @@ def main():
     args = create_argparser().parse_args()
 
     dist_util.setup_dist()
-    logger.configure()
+    logger.configure(args.log_dir)
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_classifier_and_diffusion(
@@ -204,7 +204,7 @@ def create_argparser():
         data_dir="",
         val_data_dir="",
         noised=True,
-        iterations=150000,
+        iterations=100000,
         lr=3e-4,
         weight_decay=0.0,
         anneal_lr=False,
@@ -214,7 +214,8 @@ def create_argparser():
         resume_checkpoint="",
         log_interval=10,
         eval_interval=5,
-        save_interval=10000,
+        save_interval=20000,
+        log_dir='tmp'
     )
     defaults.update(classifier_and_diffusion_defaults())
     parser = argparse.ArgumentParser()

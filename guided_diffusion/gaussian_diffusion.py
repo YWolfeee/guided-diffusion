@@ -7,6 +7,7 @@ Docstrings have been added, as well as DDIM sampling and a new collection of bet
 
 import enum
 import math
+from functools import partial
 
 import numpy as np
 import torch as th
@@ -370,7 +371,7 @@ class GaussianDiffusion:
         )
         return new_mean
 
-    def condition_score(self, cond_fn, p_mean_var, x, t, model_kwargs=None):
+    def condition_score(self, cond_fn, p_mean_var, x, t, out_func=None, model_kwargs=None):
         """
         Compute what the p_mean_variance output would have been, should the
         model's score function be conditioned by cond_fn.
@@ -398,6 +399,52 @@ class GaussianDiffusion:
             # manifold does not update eps using new x0. guide_x0 does.
             if model_kwargs['guide_mode'] == 'guide_x0':
                 out["eps"] = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
+        
+        elif model_kwargs['guide_mode'] == 'unbiased':
+            xstart = p_mean_var["pred_xstart"]
+            diff = th.mean((x - self.alphas_cumprod[t[0].item()] ** 0.5 * xstart) ** 2).item()
+            init_mean = th.mean(xstart ** 2).item()
+            for i in range(1):
+                gau_score_old = 0.5 * (_extract_into_tensor(self.alphas_cumprod, t, x.shape) ** 0.5) * self._predict_eps_from_xstart(x, t, xstart) 
+                f_score = cond_fn(
+                    xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
+                )
+                gau_score_new = 0.5 * (_extract_into_tensor(self.alphas_cumprod, t, x.shape) ** 0.5) * self._predict_eps_from_xstart(x, t, xstart) 
+                xstart = xstart + f_score + gau_score_new
+                # gau_score = 0.5 * (_extract_into_tensor(self.alphas_cumprod/(1-self.alphas_cumprod), t, x.shape) ** 0.5) * self._predict_eps_from_xstart(x, t, xstart) 
+                # xstart = xstart + 0.1 * (gau_score_new - gau_score_old)
+            
+            f_mean = th.mean(f_score ** 2).item()
+            gau_mean = th.mean((gau_score_new) ** 2).item()
+            final_mean = th.mean(xstart ** 2).item()
+            out["pred_xstart"] = xstart
+            out["eps"] = self._predict_eps_from_xstart(x, t, xstart)
+            print(f"t:{t[0].item()}, init_mean: {init_mean}, final_mean: {final_mean}, diff: {diff}, f_mean: {f_mean}, gau_mean: {gau_mean}")
+            
+        elif model_kwargs['guide_mode'] == 'resample':
+            xstart = p_mean_var["pred_xstart"]
+            init_mean = th.mean(xstart ** 2).item()
+            for i in range(1):
+                f_score = cond_fn(
+                    xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
+                )
+                # xstart = xstart + f_score
+                # xt = self.q_sample(xstart, t)
+                # xstart_sam = out_func(x=xt, t=t)['pred_xstart']
+                p_xt = self.q_mean_variance(xstart, t)[0]
+                
+                # graident of x_0 w.r.t. difference of x_t
+                g_score = self.alphas_cumprod[t[0].item()]*(x - p_xt)  
+                # xstart = xstart + g_score + f_score
+                # reparam_rate = 0.1
+                # xstart = (1-reparam_rate) * xstart + reparam_rate * xstart_sam
+            final_mean = th.mean(xstart ** 2).item()
+            f_mean = th.mean(f_score ** 2).item()
+            g_mean = th.mean(g_score ** 2).item()
+            diff = th.mean((p_mean_var["pred_xstart"] - xstart) ** 2).item()
+            out["pred_xstart"] = xstart
+            out["eps"] = self._predict_eps_from_xstart(x, t, xstart)
+            print(f"t:{t[0].item()}, init_mean: {init_mean}, final_mean: {final_mean}, diff: {diff}, f_mean: {f_mean}, g_mean: {g_mean}")
 
         out["mean"], _, _ = self.q_posterior_mean_variance(
             x_start=out["pred_xstart"], x_t=x, t=t
@@ -562,6 +609,7 @@ class GaussianDiffusion:
 
         Same usage as p_sample().
         """
+        out_func = partial(self.p_mean_variance, model=model, clip_denoised=clip_denoised, denoised_fn=denoised_fn, model_kwargs=model_kwargs)
         out = self.p_mean_variance(
             model,
             x,
@@ -572,7 +620,7 @@ class GaussianDiffusion:
         )
 
         if cond_fn is not None:
-            out = self.condition_score(cond_fn, out, x, t, model_kwargs=model_kwargs)
+            out = self.condition_score(cond_fn, out, x, t, out_func, model_kwargs=model_kwargs)
         eps = out['eps']
 
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)

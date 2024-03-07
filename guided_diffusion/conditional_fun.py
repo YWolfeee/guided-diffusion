@@ -25,7 +25,7 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
             log_probs = F.log_softmax(logits, dim=-1)
             selected = log_probs[range(len(logits)), y.view(-1)]
             return torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale
-    if args.guide_mode in ["classifier", "guide_x0", "manifold", 'unbiased']:
+    if args.guide_mode in ["classifier", "guide_x0", "manifold", 'unbiased', "resample"]:
         return cond_fn, model_kwargs
     else:
         raise ValueError(f"Unknown guide mode: {args.guide_mode}")

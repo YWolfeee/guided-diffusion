@@ -116,8 +116,8 @@ def save_images(images: np.ndarray,
 def create_argparser():
     defaults = dict(
         clip_denoised=True,
-        num_samples=64,
-        batch_size=16,
+        num_samples=1024,
+        batch_size=1024,
         use_ddim=False,
         model_path="",
         log_dir="tmp"

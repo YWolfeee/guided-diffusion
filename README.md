@@ -1,5 +1,13 @@
 # guided-diffusion
 
+# Revision
+
+### evaluation
+1. evaluation的数据集准备：`cd datasets & python cifar10.py & python mnist.py`，这可以下载这两个数据集。下载完后数据集是图片格式，需要使用`python evaluations/image2npy.py`转化为`.npy`格式，这是用于`evaluations/evaluator.py`读取的格式。如果想要evaluate带标签的数据集，可以传入positive_id，例如`python image2npy.py --positive_id 8`.
+2. 跑evaluator前需要安装tensorflow，直接使用`pip install tensorflow`即可（或者在evaluations文件夹里`pip install -r requirements.txt`）。
+3. 可以测试一下是否能正常运行evaluator，用刚准备好的格式化数据集测试：`python evaluator.py ref/mnist_test.npz ref/mnist_test.npz`，这会用相同的数据集作为reference和generated，所以fid基本是0. 注意第一次运行会下载inceptionV3模型。如果这步成功，之后只要传入ref和sample的.npz地址即可。
+
+
 This is the codebase for [Diffusion Models Beat GANS on Image Synthesis](http://arxiv.org/abs/2105.05233).
 
 This repository is based on [openai/improved-diffusion](https://github.com/openai/improved-diffusion), with modifications for classifier conditioning and architecture improvements.

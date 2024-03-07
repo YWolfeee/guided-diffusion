@@ -12,6 +12,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from guided_diffusion import dist_util, logger
+from guided_diffusion.conditional_fun import get_cond_fn
 from guided_diffusion.script_util import (
     NUM_CLASSES,
     model_and_diffusion_defaults,
@@ -25,6 +26,11 @@ from guided_diffusion.script_util import (
 
 def main():
     args = create_argparser().parse_args()
+    if args.guide_mode in ["None", "none", None] or args.classifier_scale == 0.0:
+        args.guide_mode = None
+        args.classifier_scale = 0.0
+        logger.log("No classifier guidance will be used.")
+    assert args.class_cond is False, "We focus on the setting where the diffusion mode is unconditional and the guidance is accomplished via an additional classifier."
 
     dist_util.setup_dist()
     logger.configure(dir=args.log_dir)
@@ -51,29 +57,18 @@ def main():
         classifier.convert_to_fp16()
     classifier.eval()
 
-    def cond_fn(x, t, y=None):
-        assert y is not None
-        with th.enable_grad():
-            x_in = x.detach().requires_grad_(True)
-            logits = classifier(x_in, t)
-            log_probs = F.log_softmax(logits, dim=-1)
-            selected = log_probs[range(len(logits)), y.view(-1)]
-            return th.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale
+    cond_fn, model_kwargs = get_cond_fn(classifier, args)
 
-    def model_fn(x, t, y=None):
-        assert y is not None
+    def model_fn(x, t, y=None,**kwargs):
+        # assert y is not None
         return model(x, t, y if args.class_cond else None)
+        # return model(x, t, y if args.guide_mode is not None else None)
 
     logger.log("sampling...")
     all_images = []
     all_labels = []
     while len(all_images) * args.batch_size < args.num_samples:
-        model_kwargs = {}
-        # classes = th.randint(
-        #     low=0, high=NUM_CLASSES, size=(args.batch_size,), device=dist_util.dev()
-        # )
-        classes = args.positive_label * th.ones((args.batch_size,), device=dist_util.dev(), dtype=th.int)
-        model_kwargs["y"] = classes
+        classes = model_kwargs["y"]
         sample_fn = (
             diffusion.p_sample_loop if not args.use_ddim else diffusion.ddim_sample_loop
         )
@@ -144,7 +139,8 @@ def create_argparser():
         model_path="",
         log_dir="tmp",
         classifier_path="",
-        classifier_scale=1.0,
+        guide_mode="None",
+        classifier_scale=0.0,
         positive_label=0,
     )
     defaults.update(model_and_diffusion_defaults())

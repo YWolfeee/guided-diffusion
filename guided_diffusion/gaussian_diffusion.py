@@ -318,11 +318,13 @@ class GaussianDiffusion:
         assert (
             model_mean.shape == model_log_variance.shape == pred_xstart.shape == x.shape
         )
+        eps = self._predict_eps_from_xstart(x, t, pred_xstart)
         return {
             "mean": model_mean,
             "variance": model_variance,
             "log_variance": model_log_variance,
             "pred_xstart": pred_xstart,
+            "eps": eps,
         }
 
     def _predict_xstart_from_eps(self, x_t, t, eps):
@@ -380,13 +382,23 @@ class GaussianDiffusion:
         """
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
 
-        eps = self._predict_eps_from_xstart(x, t, p_mean_var["pred_xstart"])
-        eps = eps - (1 - alpha_bar).sqrt() * cond_fn(
-            x, self._scale_timesteps(t), **model_kwargs
-        )
-
         out = p_mean_var.copy()
-        out["pred_xstart"] = self._predict_xstart_from_eps(x, t, eps)
+
+        eps = self._predict_eps_from_xstart(x, t, p_mean_var["pred_xstart"])
+        if model_kwargs['guide_mode'] == 'classifier':
+            eps = eps - (1 - alpha_bar).sqrt() * cond_fn(
+                x, self._scale_timesteps(t), **model_kwargs
+            )
+            out["pred_xstart"] = self._predict_xstart_from_eps(x, t, eps)
+        
+        elif model_kwargs['guide_mode'] in ['guide_x0', 'manifold']:
+            out["pred_xstart"] = p_mean_var["pred_xstart"] + cond_fn(
+                p_mean_var["pred_xstart"], self._scale_timesteps(th.zeros_like(t)), **model_kwargs
+            )
+            # manifold does not update eps using new x0. guide_x0 does.
+            if model_kwargs['guide_mode'] == 'guide_x0':
+                out["eps"] = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
+
         out["mean"], _, _ = self.q_posterior_mean_variance(
             x_start=out["pred_xstart"], x_t=x, t=t
         )
@@ -558,12 +570,10 @@ class GaussianDiffusion:
             denoised_fn=denoised_fn,
             model_kwargs=model_kwargs,
         )
+
         if cond_fn is not None:
             out = self.condition_score(cond_fn, out, x, t, model_kwargs=model_kwargs)
-
-        # Usually our model outputs epsilon, but we re-derive it
-        # in case we used x_start or x_prev prediction.
-        eps = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
+        eps = out['eps']
 
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
         alpha_bar_prev = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape)

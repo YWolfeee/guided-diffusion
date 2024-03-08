@@ -6,43 +6,56 @@ guide_modes = [
 
 classifier_scale = [0.1, 0.5, 1.0, 2.0] # for classifier
 else_scale = [5, 10, 20, 50] # for else
-positive_label = [1]
+positive_label = [1, 4, 8]
 
-# 15 x 4 x 3 = 180
+# 8 * 3 * 3 = 96 / 12 card = 8 iter
 
-model_path="/home/linhw/code/guided-diffusion/ckpts/mnist/ema_0.9999_100000.pt"
-classifier_path="/home/linhw/code/guided-diffusion/ckpts/mnist_classifier/model099999.pt"
+home_path = '.'
+model_path=f"{home_path}/ckpts/mnist-diffusion-10w/ema_0.9999_100000.pt"
+classifier_path=f"{home_path}/ckpts/mnist-classifier-10w/model099999.pt"
 
-for guide_mode in guide_modes[-2:]:
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('--gpu_id', type=int, default=0)
+parser.add_argument('--mode_id', type=int, default=0)
+parser.add_argument('--label_id', type=int, default=0)
+args = parser.parse_args()
 
-    for scale in zip(classifier_scale, else_scale):
+# print args in key, value style
+print("args:")
+for key, value in vars(args).items():
+    print(f"{key}: {value}")
 
-        if guide_mode == 'classifier':
-            scale = scale[0]
-        else:
-            scale = scale[1]
+gpu_id = args.gpu_id
+guide_mode = guide_modes[args.mode_id]
+label = positive_label[args.label_id]
+for scale in zip(classifier_scale, else_scale):
+
+    if guide_mode == 'classifier':
+        scale = scale[0]
+    else:
+        scale = scale[1]
+    
+
+    print(f'guide_mode={guide_mode}, scale={scale}, label={label}')
+
+    os.system(
+        f'''
+        CUDA_VISIBLE_DEVICES={gpu_id} python scripts/classifier_sample.py \
+        --timestep_respacing 50 \
+        --use_ddim True \
+        --log_dir "sweep/mnist+label={label}/guide_mode={guide_mode}-scale={scale}-label={label}" \
+        --batch_size 256 \
+        --num_samples 10240 \
+        --positive_label {label} \
+        --classifier_scale {scale} \
+        --guide_mode "{guide_mode}" \
+        --model_path {model_path} \
+        --classifier_path {classifier_path} \
+        --image_size 32 \
+        --num_channels 128 \
+        --num_res_blocks 3 \
+        --diffusion_steps 1000 \
+        --noise_schedule linear \
         
-        for label in positive_label:
-
-            print(f'guide_mode={guide_mode}, scale={scale}, label={label}')
-
-            os.system(
-                f'''
-                CUDA_VISIBLE_DEVICES=6 python scripts/classifier_sample.py \
-                --timestep_respacing 50 \
-                --use_ddim True \
-                --log_dir "/home/linhw/code/guided-diffusion/haowei/3.8-mnist/guide_mode={guide_mode}-scale={scale}-label={label}" \
-                --batch_size 256 \
-                --num_samples 10240 \
-                --positive_label {label} \
-                --classifier_scale {scale} \
-                --guide_mode "{guide_mode}" \
-                --model_path {model_path} \
-                --classifier_path {classifier_path} \
-                --image_size 32 \
-                --num_channels 128 \
-                --num_res_blocks 3 \
-                --diffusion_steps 1000 \
-                --noise_schedule linear \
-                
-            ''')
+    ''')

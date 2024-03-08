@@ -17,6 +17,8 @@ import tensorflow.compat.v1 as tf
 from scipy import linalg
 from tqdm.auto import tqdm
 
+from classifier import compute_accuracy
+
 INCEPTION_V3_URL = "https://openaipublic.blob.core.windows.net/diffusion/jul-2021/ref_batches/classify_image_graph_def.pb"
 INCEPTION_V3_PATH = "classify_image_graph_def.pb"
 
@@ -28,6 +30,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("ref_batch", help="path to reference batch npz file")
     parser.add_argument("sample_batch", help="path to sample batch npz file")
+    parser.add_argument('--classifier_path', type=str, default=None)
+    parser.add_argument('--label', type=int, default=None)
     args = parser.parse_args()
 
     config = tf.ConfigProto(
@@ -50,12 +54,17 @@ def main():
     sample_acts = evaluator.read_activations(args.sample_batch)
     print("computing/reading sample batch statistics...")
     sample_stats, sample_stats_spatial = evaluator.read_statistics(args.sample_batch, sample_acts)
+    
+    if args.classifier_path is not None:
+        validity = compute_accuracy(args.classifier_path, args.sample_batch, args.label)
+
+    prec, recall = evaluator.compute_prec_recall(ref_acts[0], sample_acts[0])
 
     print("Computing evaluations...")
+    print("Validity:", round(validity, 4))
     print("Inception Score:", evaluator.compute_inception_score(sample_acts[0]))
     print("FID:", sample_stats.frechet_distance(ref_stats))
     print("sFID:", sample_stats_spatial.frechet_distance(ref_stats_spatial))
-    prec, recall = evaluator.compute_prec_recall(ref_acts[0], sample_acts[0])
     print("Precision:", prec)
     print("Recall:", recall)
 

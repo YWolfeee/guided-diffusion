@@ -52,17 +52,17 @@ def label_filter(arr, classes, class_id):
     return arr[classes == class_id], classes[classes == class_id]
 
 if __name__ == '__main__':
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--positive_id', type=int, default=None)
-    args = parser.parse_args()
+    # import argparse
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument('--positive_id', type=int, default=None)
+    # args = parser.parse_args()
 
-    data_dir = './datasets/mnist_test'
-    save_path = './evaluations/ref/' + data_dir.split('/')[-1]
-    arr, labels = read_images(data_dir, 32)
+    for positive_id in range(10):
+        data_dir = './datasets/mnist_test'
+        save_path = './evaluations/ref/' + data_dir.split('/')[-1]
+        arr, labels = read_images(data_dir, 32)
 
-    if args.positive_id is not None:
-        arr, labels = label_filter(arr, labels, args.positive_id)
-        save_path += f'_{args.positive_id}'
+        arr, labels = label_filter(arr, labels, positive_id)
+        save_path += f'_{positive_id}'
 
-    save_images(arr, labels, save_path + '.npz')
+        save_images(arr, labels, save_path + '.npz')

@@ -4,14 +4,15 @@ import os
 import argparse
 from PIL import Image
 from torchvision.models import resnet18
-from torch.optim import AdamW
+from torch.optim import AdamW, SGD
+from torch.optim.lr_scheduler import MultiStepLR
 from torchvision.transforms import ToTensor
 from guided_diffusion.image_datasets import load_data
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--train_dir', type=str, default='/home/linhw/code/improved-diffusion/datasets/mnist_train')
-    parser.add_argument('--test_dir', type=str, default='/home/linhw/code/improved-diffusion/datasets/mnist_test')
+    parser.add_argument('--test_npz', type=str, default='/home/linhw/code/guided-diffusion/evaluations/ref/mnist_test.npz')
     args = parser.parse_args()
     return args
 
@@ -61,17 +62,18 @@ def train_classifier():
     args = get_args()
     
     train_dir = args.train_dir
-    test_dir = args.test_dir
 
-    ITER = 50000
-    batch_size = 1024
+    ITER = 200000
+    batch_size = 256
 
     model = get_model(num_classes=10).cuda()
 
     for p in model.parameters():
         p.requires_grad = True
     
-    opt = AdamW(model.parameters(), lr=1e-3)
+    opt = SGD(model.parameters(), lr=5e-2, weight_decay=0.001, momentum=0.9)
+    scheduler = MultiStepLR(opt, milestones=[20000, 40000], gamma=0.1)
+
     train_loader = get_dataloader(
         train_dir, batch_size, 32
     )
@@ -93,6 +95,8 @@ def train_classifier():
         opt.step()
         opt.zero_grad()
         
+        scheduler.step()
+
         if i % 200 == 0:
             print(f'iter {i}, loss: {loss.item()}')
 
@@ -100,10 +104,10 @@ def train_classifier():
             acc = []
             with torch.no_grad():
                 model.eval()
-                acc = compute_accuracy(model, '/home/linhw/code/guided-diffusion/evaluations/ref/mnist_test.npz')
+                acc = compute_accuracy(model, args.test_npz)
             print(f'acc: {acc}')
 
-            ds = test_dir.split('/')[-1]
+            ds = args.test_npz.split('/')[-1].strip('.npz')
             os.makedirs(f'./eval_cls/{ds}', exist_ok=True)
             torch.save(model.state_dict(), f'./eval_cls/{ds}/model_{i}_{acc}.pth')
 

@@ -1,3 +1,4 @@
+import json
 import argparse
 import io
 import os
@@ -32,6 +33,7 @@ def main():
     parser.add_argument("sample_batch", help="path to sample batch npz file")
     parser.add_argument('--classifier_path', type=str, default=None)
     parser.add_argument('--label', type=int, default=None)
+    parser.add_argument('--output_path', type=str, default=None)
     args = parser.parse_args()
 
     config = tf.ConfigProto(
@@ -60,13 +62,24 @@ def main():
 
     prec, recall = evaluator.compute_prec_recall(ref_acts[0], sample_acts[0])
 
-    print("Computing evaluations...")
-    print("Validity:", round(validity, 4))
-    print("Inception Score:", evaluator.compute_inception_score(sample_acts[0]))
-    print("FID:", sample_stats.frechet_distance(ref_stats))
-    print("sFID:", sample_stats_spatial.frechet_distance(ref_stats_spatial))
-    print("Precision:", prec)
-    print("Recall:", recall)
+    IS = evaluator.compute_inception_score(sample_acts[0])
+    validity = round(validity, 4)
+    FID = sample_stats.frechet_distance(ref_stats)
+    sFID = sample_stats_spatial.frechet_distance(ref_stats_spatial)
+
+    res = {
+        "validity": validity,
+        "inception_score": IS,
+        "fid": FID,
+        "sfid": sFID,
+        "precision": prec,
+        "recall": recall,
+    }
+    
+    print(res)
+    if args.output_path is not None:
+        with open(args.output_path, 'w') as f:
+            json.dump(res, f)
 
 
 class InvalidFIDException(Exception):

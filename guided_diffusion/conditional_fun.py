@@ -23,7 +23,7 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
             x_in = x.detach().requires_grad_(True)
             logits = classifier(x_in, t)
             log_probs = F.log_softmax(logits, dim=-1)
-            selected = log_probs[range(len(logits)), y.view(-1)]
+            selected = log_probs[range(len(logits)), y.view(-1).long()]
             return torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale
     return cond_fn, model_kwargs
     # if args.guide_mode in ["classifier", "guide_x0", "manifold", 'unbiased', "resample"]:

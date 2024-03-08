@@ -22,10 +22,9 @@ def setup_dist():
     """
     Setup a distributed process group.
     """
-    # return 
+    
     if dist.is_initialized():
         return
-    
     # if os.environ.get('CUDA_VISIBLE_DEVICES', None) is None:
     #     os.environ["CUDA_VISIBLE_DEVICES"] = f"{MPI.COMM_WORLD.Get_rank() % GPUS_PER_NODE}"
 
@@ -39,9 +38,12 @@ def setup_dist():
     # os.environ["MASTER_ADDR"] = comm.bcast(hostname, root=0)
     # os.environ["RANK"] = str(comm.rank)
     # os.environ["WORLD_SIZE"] = str(comm.size)
+    os.environ["MASTER_ADDR"] = hostname
+    os.environ["RANK"] = str(0)
+    os.environ["WORLD_SIZE"] = str(1)
 
     # port = comm.bcast(_find_free_port(), root=0)
-    # os.environ["MASTER_PORT"] = str(port)
+    os.environ["MASTER_PORT"] = str(_find_free_port())
     dist.init_process_group(backend=backend, init_method="env://")
 
 

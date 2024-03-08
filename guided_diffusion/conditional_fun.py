@@ -15,7 +15,7 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
                     "classifier_scale": args.classifier_scale,
                     "positive_label": args.positive_label}
     model_kwargs["y"] = args.positive_label * torch.ones((args.batch_size,), device=dist_util.dev(), dtype=torch.int)
-    if args.guide_mode in ["None", "none", None] or args.classifier_scale == 0:
+    if args.guide_mode in ["None", "none", None]:
         return None, model_kwargs
     def cond_fn(x, t, y=None, **kwargs):
         assert y is not None
@@ -25,8 +25,8 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
             log_probs = F.log_softmax(logits, dim=-1)
             selected = log_probs[range(len(logits)), y.view(-1)]
             return torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale
-    if args.guide_mode in ["classifier", "guide_x0", "manifold", 'unbiased', "resample"]:
-        return cond_fn, model_kwargs
-    else:
-        raise ValueError(f"Unknown guide mode: {args.guide_mode}")
+    return cond_fn, model_kwargs
+    # if args.guide_mode in ["classifier", "guide_x0", "manifold", 'unbiased', "resample"]:
+    # else:
+    # raise ValueError(f"Unknown guide mode: {args.guide_mode}")
     

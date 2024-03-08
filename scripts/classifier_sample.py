@@ -11,6 +11,9 @@ import torch as th
 import torch.distributed as dist
 import torch.nn.functional as F
 
+np.random.seed(0)
+th.manual_seed(0)
+
 from guided_diffusion import dist_util, logger
 from guided_diffusion.conditional_fun import get_cond_fn
 from guided_diffusion.script_util import (
@@ -26,14 +29,16 @@ from guided_diffusion.script_util import (
 
 def main():
     args = create_argparser().parse_args()
-    if args.guide_mode in ["None", "none", None] or args.classifier_scale == 0.0:
+    args.log_dir = os.path.join(args.log_dir, f"mode={args.guide_mode}+scale={args.classifier_scale}")
+    logger.configure(dir=args.log_dir)
+
+    if args.guide_mode in ["None", "none", None]:
         args.guide_mode = None
         args.classifier_scale = 0.0
         logger.log("No classifier guidance will be used.")
     assert args.class_cond is False, "We focus on the setting where the diffusion mode is unconditional and the guidance is accomplished via an additional classifier."
 
     dist_util.setup_dist()
-    logger.configure(dir=args.log_dir)
 
     logger.log("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(
@@ -79,7 +84,7 @@ def main():
             model_kwargs=model_kwargs,
             cond_fn=cond_fn,
             device=dist_util.dev(),
-            progress=True,
+            progress=args.progress,
         )
         sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
         sample = sample.permute(0, 2, 3, 1)
@@ -142,6 +147,7 @@ def create_argparser():
         guide_mode="None",
         classifier_scale=0.0,
         positive_label=0,
+        progress=False,
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(classifier_defaults())

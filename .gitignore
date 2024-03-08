@@ -5,3 +5,5 @@ cifar_classifier
 haowei
 mnist_classifier
 *.egg-info
+datasets
+results

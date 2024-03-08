@@ -400,51 +400,79 @@ class GaussianDiffusion:
             if model_kwargs['guide_mode'] == 'guide_x0':
                 out["eps"] = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
         
-        elif model_kwargs['guide_mode'] == 'unbiased':
+        elif 'dynamic' in model_kwargs['guide_mode']:
             xstart = p_mean_var["pred_xstart"]
-            diff = th.mean((x - self.alphas_cumprod[t[0].item()] ** 0.5 * xstart) ** 2).item()
             init_mean = th.mean(xstart ** 2).item()
-            for i in range(1):
-                gau_score_old = 0.5 * (_extract_into_tensor(self.alphas_cumprod, t, x.shape) ** 0.5) * self._predict_eps_from_xstart(x, t, xstart) 
-                f_score = cond_fn(
-                    xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
-                )
-                gau_score_new = 0.5 * (_extract_into_tensor(self.alphas_cumprod, t, x.shape) ** 0.5) * self._predict_eps_from_xstart(x, t, xstart) 
-                xstart = xstart + f_score + gau_score_new
-                # gau_score = 0.5 * (_extract_into_tensor(self.alphas_cumprod/(1-self.alphas_cumprod), t, x.shape) ** 0.5) * self._predict_eps_from_xstart(x, t, xstart) 
-                # xstart = xstart + 0.1 * (gau_score_new - gau_score_old)
-            
-            f_mean = th.mean(f_score ** 2).item()
-            gau_mean = th.mean((gau_score_new) ** 2).item()
+            ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+            # compute (1-ca_t) * scores of p(x0), p(xt|x0), and p(y|x0)
+            fs = cond_fn(
+                xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
+            ) * (1-ca_t)
+            ps = -(1-ca_t)**0.5 * out_func(x=xstart, t=th.zeros_like(t))['eps']
+            gs = (ca_t) ** 0.5 * (x - ca_t**0.5 * xstart)
+
+            # sum over scores based on strategy
+            scores = 0
+            if model_kwargs['guide_mode'] == 'dynamic-full-0.5*a*(1-a)':
+                scores = 0.5 * ca_t * (1-ca_t) * (fs + ps + gs)
+            elif model_kwargs['guide_mode'] == 'dynamic-full-0.1*a*(1-a)':
+                scores = 0.1 * ca_t * (1-ca_t) * (fs + ps + gs)
+            elif model_kwargs['guide_mode'] == 'dynamic-two-0.5*a*(1-a)':
+                scores = fs + 0.5 * ca_t * (1-ca_t) * (ps + gs)
+            elif model_kwargs['guide_mode'] == 'dynamic-two-0.1*a*(1-a)':
+                scores = fs + 0.1 * ca_t * (1-ca_t) * (ps + gs)
+            elif model_kwargs['guide_mode'] == 'dynamic-two-0.5*a-0.5*(1-a)':
+                scores = fs + 0.5 * ca_t * ps + 0.5 * (1-ca_t) * gs
+            elif model_kwargs['guide_mode'] == 'dynamic-two-0.1*a-0.1*(1-a)':
+                scores = fs + 0.1 * ca_t * ps + 0.1 * (1-ca_t) * gs
+            elif model_kwargs['guide_mode'] == 'dynamic-one-0.5*(1-a)':
+                scores = fs + ps + 0.5 * (1-ca_t) * gs
+            elif model_kwargs['guide_mode'] == 'dynamic-one-0.1*(1-a)':
+                scores = fs + ps + 0.1 * (1-ca_t) * gs
+            elif model_kwargs['guide_mode'] == 'dynamic-nog-0.5*a':
+                scores = fs + 0.5 * ca_t * ps
+            elif model_kwargs['guide_mode'] == 'dynamic-nog-0.1*a':
+                scores = fs + 0.1 * ca_t * ps
+            elif model_kwargs['guide_mode'] == 'dynamic-nog-0.5':
+                scores = fs + 0.5 * gs
+            elif model_kwargs['guide_mode'] == 'dynamic-nog-0.1':
+                scores = fs + 0.1 * gs
+
+            xstart += scores
+                            
+            p_mean = th.mean(ps ** 2).item()
+            f_mean = th.mean(fs ** 2).item()
+            gau_mean = th.mean(gs ** 2).item()
             final_mean = th.mean(xstart ** 2).item()
             out["pred_xstart"] = xstart
             out["eps"] = self._predict_eps_from_xstart(x, t, xstart)
-            print(f"t:{t[0].item()}, init_mean: {init_mean}, final_mean: {final_mean}, diff: {diff}, f_mean: {f_mean}, gau_mean: {gau_mean}")
+            from guided_diffusion import logger
+            logger.log(f"t:{t[0].item()}, init_mean: {init_mean:.2e}, final_mean: {final_mean:.2e}, f_mean: {f_mean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}")
             
-        elif model_kwargs['guide_mode'] == 'resample':
-            xstart = p_mean_var["pred_xstart"]
-            init_mean = th.mean(xstart ** 2).item()
-            for i in range(1):
-                f_score = cond_fn(
-                    xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
-                )
-                # xstart = xstart + f_score
-                # xt = self.q_sample(xstart, t)
-                # xstart_sam = out_func(x=xt, t=t)['pred_xstart']
-                p_xt = self.q_mean_variance(xstart, t)[0]
+        # elif model_kwargs['guide_mode'] == 'resample':
+        #     xstart = p_mean_var["pred_xstart"]
+        #     init_mean = th.mean(xstart ** 2).item()
+        #     for i in range(1):
+        #         fs = cond_fn(
+        #             xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
+        #         )
+        #         # xstart = xstart + f_score
+        #         # xt = self.q_sample(xstart, t)
+        #         # xstart_sam = out_func(x=xt, t=t)['pred_xstart']
+        #         p_xt = self.q_mean_variance(xstart, t)[0]
                 
-                # graident of x_0 w.r.t. difference of x_t
-                g_score = self.alphas_cumprod[t[0].item()]*(x - p_xt)  
-                # xstart = xstart + g_score + f_score
-                # reparam_rate = 0.1
-                # xstart = (1-reparam_rate) * xstart + reparam_rate * xstart_sam
-            final_mean = th.mean(xstart ** 2).item()
-            f_mean = th.mean(f_score ** 2).item()
-            g_mean = th.mean(g_score ** 2).item()
-            diff = th.mean((p_mean_var["pred_xstart"] - xstart) ** 2).item()
-            out["pred_xstart"] = xstart
-            out["eps"] = self._predict_eps_from_xstart(x, t, xstart)
-            print(f"t:{t[0].item()}, init_mean: {init_mean}, final_mean: {final_mean}, diff: {diff}, f_mean: {f_mean}, g_mean: {g_mean}")
+        #         # graident of x_0 w.r.t. difference of x_t
+        #         gs = self.alphas_cumprod[t[0].item()]*(x - p_xt)  
+        #         # xstart = xstart + g_score + f_score
+        #         # reparam_rate = 0.1
+        #         # xstart = (1-reparam_rate) * xstart + reparam_rate * xstart_sam
+        #     final_mean = th.mean(xstart ** 2).item()
+        #     f_mean = th.mean(fs ** 2).item()
+        #     g_mean = th.mean(gs ** 2).item()
+        #     diff = th.mean((p_mean_var["pred_xstart"] - xstart) ** 2).item()
+        #     out["pred_xstart"] = xstart
+        #     out["eps"] = self._predict_eps_from_xstart(x, t, xstart)
+        #     print(f"t:{t[0].item()}, init_mean: {init_mean}, final_mean: {final_mean}, diff: {diff}, f_mean: {f_mean}, g_mean: {g_mean}")
 
         out["mean"], _, _ = self.q_posterior_mean_variance(
             x_start=out["pred_xstart"], x_t=x, t=t

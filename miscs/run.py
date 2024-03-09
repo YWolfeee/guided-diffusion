@@ -27,18 +27,19 @@ batch_size = 256
 timesteps = 50
 
 CUDA_VISIBLE_DEVICES = 6
-dataset = "mnist"   # dataset name
+dataset = "cifar"   # dataset name
 
 refdir = "/home/linhw/code/guided-diffusion/evaluations/ref"    # path to reference images (will use {refdir}/{dataset}_test_{label}.npz for evaluation)
 if dataset == "mnist":
     model_path="/home/linhw/code/guided-diffusion/ckpts/mnist/ema_0.9999_100000.pt"         # path to the diffusion model
     classifier_path="/home/linhw/code/guided-diffusion/ckpts/mnist_classifier/model099999.pt"   # path to the classifier
+    eval_classifier="/home/linhw/code/guided-diffusion/evaluations/eval_cls/mnist_test/model_34500_0.9909.pth"  # evaluation classifier
     workdir = "/home/linhw/code/guided-diffusion/haowei/3.8-mnist"  # path to save any output files
 elif dataset == 'cifar':
-    model_path="/home/linhw/code/guided-diffusion/ckpts/cifar/ema_0.9999_200000.pt"         # path to the diffusion model
+    model_path="/home/linhw/code/guided-diffusion/ckpts/cifar10/ema_0.9999_200000.pt"         # path to the diffusion model
     classifier_path="/home/linhw/code/guided-diffusion/ckpts/cifar_classifier/model099999.pt"   # path to the classifier
     workdir = "/home/linhw/code/guided-diffusion/haowei/3.8-cifar"  # path to save any output files
-
+    eval_classifier="/home/linhw/code/guided-diffusion/evaluations/eval_cls/cifar_test/model_89500_0.8720999956130981.pth"
 '''
     The following part does not need to be modified
 '''
@@ -135,8 +136,8 @@ for guide_mode in guide_modes:
             # run the evaluation
             os.system(
                 f'''
-                CUDA_VISIBLE_DEVICES={CUDA_VISIBLE_DEVICES} python ./evaluator.py \
-                {ref_batch} "{npz}" --classifier_path {classifier_path} --label {label} --output_path "{logdir}/log.json"
+                CUDA_VISIBLE_DEVICES={CUDA_VISIBLE_DEVICES} python ./evaluations/evaluator.py \
+                {ref_batch} "{npz}" --classifier_path {eval_classifier} --label {label} --output_path "{logdir}/log.json"
                 ''')
 
             # check if the evaluation is already done before

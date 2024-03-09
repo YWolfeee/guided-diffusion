@@ -7,7 +7,7 @@ import os
 import socket
 
 import blobfile as bf
-from mpi4py import MPI
+# from mpi4py import MPI
 import torch as th
 import torch.distributed as dist
 
@@ -22,25 +22,28 @@ def setup_dist():
     """
     Setup a distributed process group.
     """
+    
     if dist.is_initialized():
         return
-    
-    if os.environ.get('CUDA_VISIBLE_DEVICES', None) is None:
-        os.environ["CUDA_VISIBLE_DEVICES"] = f"{MPI.COMM_WORLD.Get_rank() % GPUS_PER_NODE}"
+    # if os.environ.get('CUDA_VISIBLE_DEVICES', None) is None:
+    #     os.environ["CUDA_VISIBLE_DEVICES"] = f"{MPI.COMM_WORLD.Get_rank() % GPUS_PER_NODE}"
 
-    comm = MPI.COMM_WORLD
+    # comm = MPI.COMM_WORLD
     backend = "gloo" if not th.cuda.is_available() else "nccl"
 
     if backend == "gloo":
         hostname = "localhost"
     else:
         hostname = socket.gethostbyname(socket.getfqdn())
-    os.environ["MASTER_ADDR"] = comm.bcast(hostname, root=0)
-    os.environ["RANK"] = str(comm.rank)
-    os.environ["WORLD_SIZE"] = str(comm.size)
+    # os.environ["MASTER_ADDR"] = comm.bcast(hostname, root=0)
+    # os.environ["RANK"] = str(comm.rank)
+    # os.environ["WORLD_SIZE"] = str(comm.size)
+    os.environ["MASTER_ADDR"] = hostname
+    os.environ["RANK"] = str(0)
+    os.environ["WORLD_SIZE"] = str(1)
 
-    port = comm.bcast(_find_free_port(), root=0)
-    os.environ["MASTER_PORT"] = str(port)
+    # port = comm.bcast(_find_free_port(), root=0)
+    os.environ["MASTER_PORT"] = str(_find_free_port())
     dist.init_process_group(backend=backend, init_method="env://")
 
 
@@ -57,6 +60,7 @@ def load_state_dict(path, **kwargs):
     """
     Load a PyTorch file without redundant fetches across MPI ranks.
     """
+    return th.load(path, **kwargs)
     chunk_size = 2 ** 30  # MPI has a relatively small size limit
     if MPI.COMM_WORLD.Get_rank() == 0:
         with bf.BlobFile(path, "rb") as f:

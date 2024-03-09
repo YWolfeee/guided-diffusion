@@ -5,6 +5,7 @@ process towards more realistic images.
 
 import argparse
 import os
+import time
 
 import numpy as np
 import torch as th
@@ -73,6 +74,7 @@ def main():
     all_images = []
     all_labels = []
     while len(all_images) * args.batch_size < args.num_samples:
+        start = time.time()
         classes = model_kwargs["y"]
         sample_fn = (
             diffusion.p_sample_loop if not args.use_ddim else diffusion.ddim_sample_loop
@@ -96,7 +98,8 @@ def main():
         gathered_labels = [th.zeros_like(classes) for _ in range(dist.get_world_size())]
         dist.all_gather(gathered_labels, classes)
         all_labels.extend([labels.cpu().numpy() for labels in gathered_labels])
-        logger.log(f"created {len(all_images) * args.batch_size} samples")
+        end = time.time()
+        logger.log(f"created {len(all_images) * args.batch_size} samples, {end - start:.01f} sec per batch")
 
     arr = np.concatenate(all_images, axis=0)
     arr = arr[: args.num_samples]

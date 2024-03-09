@@ -7,3 +7,5 @@ mnist_classifier
 *.egg-info
 datasets
 results
+wandb
+ckpts

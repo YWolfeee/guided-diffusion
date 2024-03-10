@@ -115,6 +115,20 @@ def main():
     dist.barrier()
     logger.log("sampling complete")
 
+    if args.ref_batch is not None:
+        eval_args = argparse.Namespace()
+        eval_args.ref_batch = args.ref_batch
+        eval_args.sample_batch = out_path
+        eval_args.classifier_path = args.test_classifier_path
+        eval_args.label = args.positive_label if args.guide_mode is not None else None
+        eval_args.output_path = os.path.join(logger.get_dir(), 'log.json')
+        from evaluations.evaluator import main as evaluator_main
+        logger.log(f"Running evaluator with args: {eval_args}")
+        evaluator_main(eval_args)
+    else:
+        logger.log("No reference batch provided, skipping evaluation")
+
+
 def save_images(images: np.ndarray, 
                 path_name: str, 
                 labels=None,
@@ -151,6 +165,8 @@ def create_argparser():
         classifier_scale=0.0,
         positive_label=0,
         progress=False,
+        ref_batch=None,
+        test_classifier_path="",
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(classifier_defaults())

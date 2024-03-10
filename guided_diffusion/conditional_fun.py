@@ -17,6 +17,18 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
     model_kwargs["y"] = args.positive_label * torch.ones((args.batch_size,), device=dist_util.dev(), dtype=torch.int)
     if args.guide_mode in ["None", "none", None]:
         return None, model_kwargs
+    elif args.guide_mode == 'freedom':
+        def xt_score_fn(xt, t, y=None, **kwargs):
+            # print("In side")
+            model_func = kwargs['out_func']
+            with torch.enable_grad():
+                xt_in = xt.detach().requires_grad_(True)
+                x0 = model_func(x=xt_in, t=t)['pred_xstart']
+                logits = classifier(x0, torch.zeros_like(t))
+                log_probs = F.log_softmax(logits, dim=-1)
+                selected = log_probs[range(len(logits)), y.view(-1).long()]
+                return torch.autograd.grad(selected.sum(), xt_in)[0] * args.classifier_scale
+        return xt_score_fn, model_kwargs
     def cond_fn(x, t, y=None, **kwargs):
         assert y is not None
         with torch.enable_grad():

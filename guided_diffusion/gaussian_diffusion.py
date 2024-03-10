@@ -365,13 +365,19 @@ class GaussianDiffusion:
 
         This uses the conditioning strategy from Sohl-Dickstein et al. (2015).
         """
-        gradient = cond_fn(x, self._scale_timesteps(t), **model_kwargs)
-        new_mean = (
-            p_mean_var["mean"].float() + p_mean_var["variance"] * gradient.float()
-        )
+        if model_kwargs['guide_mode'] == 'classifier':
+            gradient = cond_fn(x, self._scale_timesteps(t), **model_kwargs)
+            new_mean = (
+                p_mean_var["mean"].float() + p_mean_var["variance"] * gradient.float()
+            )
+        elif model_kwargs['guide_mode'] == 'manifold':
+            gradient = cond_fn(p_mean_var["pred_xstart"], self._scale_timesteps(th.zeros_like(t)), **model_kwargs)
+            sqrt_acum = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape) ** 0.5
+
+            new_mean = p_mean_var["mean"].float() + sqrt_acum * gradient.float()
         return new_mean
 
-    def condition_score(self, cond_fn, p_mean_var, x, t, out_func=None, model_kwargs=None):
+    def condition_score(self, cond_fn, p_mean_var, x, t, model=None, model_kwargs=None):
         """
         Compute what the p_mean_variance output would have been, should the
         model's score function be conditioned by cond_fn.
@@ -392,6 +398,16 @@ class GaussianDiffusion:
             )
             out["pred_xstart"] = self._predict_xstart_from_eps(x, t, eps)
         
+        elif model_kwargs["guide_mode"] == 'freedom':
+            from guided_diffusion.respace import SpacedDiffusion
+            unwrap_p_mean = super(SpacedDiffusion, self).p_mean_variance
+            func =  partial(unwrap_p_mean, model=model, model_kwargs=model_kwargs)
+            model_kwargs['out_func'] = func
+
+            fs = cond_fn.model(x, self._scale_timesteps(t), **model_kwargs)
+            out["pred_xstart"] += fs * _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+            
+        
         elif model_kwargs['guide_mode'] in ['guide_x0', 'manifold']:
             out["pred_xstart"] = p_mean_var["pred_xstart"] + cond_fn(
                 p_mean_var["pred_xstart"], self._scale_timesteps(th.zeros_like(t)), **model_kwargs
@@ -408,7 +424,7 @@ class GaussianDiffusion:
             fs = cond_fn(
                 xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
             ) * (1-ca_t)
-            ps = -(1-ca_t)**0.5 * out_func(x=xstart, t=th.zeros_like(t))['eps']
+            ps = -(1-ca_t)**0.5 * self.p_mean_variance(model=model, x=xstart, t=th.zeros_like(t))['eps']
             gs = (ca_t) ** 0.5 * (x - ca_t**0.5 * xstart)
 
             # sum over scores based on strategy
@@ -434,9 +450,12 @@ class GaussianDiffusion:
             elif model_kwargs['guide_mode'] == 'dynamic-nog-0.1*a':
                 scores = fs + 0.1 * ca_t * ps
             elif model_kwargs['guide_mode'] == 'dynamic-nog-0.5':
-                scores = fs + 0.5 * gs
+                scores = fs + 0.5 * ps
             elif model_kwargs['guide_mode'] == 'dynamic-nog-0.1':
-                scores = fs + 0.1 * gs
+                scores = fs + 0.1 * ps
+            elif model_kwargs['guide_mode'] == 'dynamic-fonly':
+                # This should match guide_x0
+                scores = fs
 
             xstart += scores
                             
@@ -637,7 +656,7 @@ class GaussianDiffusion:
 
         Same usage as p_sample().
         """
-        out_func = partial(self.p_mean_variance, model=model, clip_denoised=clip_denoised, denoised_fn=denoised_fn, model_kwargs=model_kwargs)
+        # out_func = partial(self.p_mean_variance, model=model, clip_denoised=clip_denoised, denoised_fn=denoised_fn, model_kwargs=model_kwargs)
         out = self.p_mean_variance(
             model,
             x,
@@ -648,7 +667,7 @@ class GaussianDiffusion:
         )
 
         if cond_fn is not None:
-            out = self.condition_score(cond_fn, out, x, t, out_func, model_kwargs=model_kwargs)
+            out = self.condition_score(cond_fn, out, x, t, model=model, model_kwargs=model_kwargs)
         eps = out['eps']
 
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)

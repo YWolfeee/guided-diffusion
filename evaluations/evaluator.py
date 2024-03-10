@@ -18,7 +18,8 @@ import tensorflow.compat.v1 as tf
 from scipy import linalg
 from tqdm.auto import tqdm
 
-from classifier import compute_accuracy
+from guided_diffusion import logger
+from evaluations.classifier import compute_accuracy
 
 INCEPTION_V3_URL = "https://openaipublic.blob.core.windows.net/diffusion/jul-2021/ref_batches/classify_image_graph_def.pb"
 INCEPTION_V3_PATH = "classify_image_graph_def.pb"
@@ -27,14 +28,8 @@ FID_POOL_NAME = "pool_3:0"
 FID_SPATIAL_NAME = "mixed_6/conv:0"
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("ref_batch", help="path to reference batch npz file")
-    parser.add_argument("sample_batch", help="path to sample batch npz file")
-    parser.add_argument('--classifier_path', type=str, default=None)
-    parser.add_argument('--label', type=int, default=None)
-    parser.add_argument('--output_path', type=str, default=None)
-    args = parser.parse_args()
+def main(args: argparse.Namespace):
+    
 
     config = tf.ConfigProto(
         allow_soft_placement=True  # allows DecodeJpeg to run on CPU in Inception graph
@@ -64,8 +59,13 @@ def main():
 
     IS = evaluator.compute_inception_score(sample_acts[0])
     validity = round(validity, 4)
-    FID = sample_stats.frechet_distance(ref_stats)
-    sFID = sample_stats_spatial.frechet_distance(ref_stats_spatial)
+    if sample_acts[0].shape[0] >= 2048:
+        FID = sample_stats.frechet_distance(ref_stats)
+        sFID = sample_stats_spatial.frechet_distance(ref_stats_spatial)
+    else:
+        logger.log("Sample batch too small to compute FID, using NaN")
+        FID = float("nan")
+        sFID = float("nan")
 
     res = {
         "validity": validity,
@@ -76,7 +76,7 @@ def main():
         "recall": recall,
     }
     
-    print(res)
+    logger.log(res)
     if args.output_path is not None:
         with open(args.output_path, 'w') as f:
             json.dump(res, f)
@@ -672,4 +672,11 @@ def _numpy_partition(arr, kth, **kwargs):
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("ref_batch", help="path to reference batch npz file")
+    parser.add_argument("sample_batch", help="path to sample batch npz file")
+    parser.add_argument('--classifier_path', type=str, default=None)
+    parser.add_argument('--label', type=int, default=None)
+    parser.add_argument('--output_path', type=str, default=None)
+    args = parser.parse_args()
+    main(args)

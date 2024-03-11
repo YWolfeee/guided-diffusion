@@ -17,7 +17,6 @@ from PIL import Image
 guide_modes = [
 'classifier', 'manifold', 'dynamic-fonly', 'dynamic-full-0.5*a*(1-a)', 'dynamic-full-0.1*a*(1-a)', 'dynamic-two-0.5*a*(1-a)', 'dynamic-two-0.1*a*(1-a)', 'dynamic-two-0.5*a-0.5*(1-a)', 'dynamic-two-0.1*a-0.1*(1-a)', 'dynamic-one-0.5*(1-a)', 'dynamic-one-0.1*(1-a)', 'dynamic-nog-0.5*a', 'dynamic-nog-0.1*a', 'dynamic-nog-0.5', 'dynamic-nog-0.1'
 ]
-# guide_modes = ['dynamic-nog-0.1*a']
 
 classifier_scale = [0.5, 1.0, 2.0] # for classifier
 manifold_scale = [5, 20, 50]
@@ -27,31 +26,32 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('--label', type=int, default=1, help='dataset name')
 parser.add_argument('--cuda_id', type=int, default=1, help='dataset name')
+parser.add_argument('--eta', type=int, default=1, help='dataset name')
 args = parser.parse_args()
 
 positive_label = [args.label]
 num_samples = 2048
 batch_size = 256
 timesteps = 50
+eta=args.eta
 
 CUDA_VISIBLE_DEVICES = args.cuda_id
-dataset = "mnist"   # dataset name
+dataset = "cifar"   # dataset name
 
 refdir = "/home/linhw/code/guided-diffusion/evaluations/ref"    # path to reference images (will use {refdir}/{dataset}_test_{label}.npz for evaluation)
 if dataset == "mnist":
     model_path="/home/linhw/code/guided-diffusion/ckpts/mnist/ema_0.9999_100000.pt"         # path to the diffusion model
     classifier_path="/home/linhw/code/guided-diffusion/ckpts/mnist_classifier/model099999.pt"   # path to the classifier
     eval_classifier="/home/linhw/code/guided-diffusion/evaluations/eval_cls/mnist_test/model_34500_0.9909.pth"  # evaluation classifier
-    workdir = "/home/linhw/code/guided-diffusion/haowei/3.11+mnist+eta=1"  # path to save any output files
-    eta=1
+    workdir = f"/home/linhw/code/guided-diffusion/haowei/3.11+mnist+eta={eta}"  # path to save any output files
 elif dataset == 'cifar':
     model_path="/home/linhw/code/guided-diffusion/ckpts/cifar10/ema_0.9999_200000.pt"         # path to the diffusion model
     classifier_path="/home/linhw/code/guided-diffusion/ckpts/cifar_classifier/model099999.pt"   # path to the classifier
-    workdir = "/home/linhw/code/guided-diffusion/haowei/3.8-cifar"  # path to save any output files
-    eval_classifier="/home/linhw/code/guided-diffusion/evaluations/eval_cls/cifar_test/model_89500_0.8720999956130981.pth"
+    workdir = f"/home/linhw/code/guided-diffusion/haowei/3.11+cifar+eta={eta}"  # path to save any output files
+    eval_classifier="nateraw/vit-base-patch16-224-cifar10"
 
 # wandb configs
-project_name = f"sweep={dataset}+date=3.10+eta=1"
+project_name = f"sweep={dataset}+date=3.11+eta={eta}"
 entity_name = "guided-diffusion"
 
 '''
@@ -117,8 +117,9 @@ for guide_mode in guide_modes:
             print(f'guide_mode={guide_mode}, scale={scale}, label={label}')
 
             # some necessary paths
-            logdir = f'{workdir}/label={label}/mode={guide_mode}+scale={scale}'
-            if not os.path.exists(logdir):
+            if len(str(scale)) >= 2 and str(scale)[-2] == '.':
+                logdir = f'{workdir}/label={label}/mode={guide_mode}+scale={scale}'
+            else:
                 logdir = f'{workdir}/label={label}/mode={guide_mode}+scale={scale}.0'
 
             npz = f'{logdir}/samples_{num_samples}x32x32x3.npz'
@@ -161,12 +162,14 @@ for guide_mode in guide_modes:
                     
                 ''')
 
-            # run the evaluation
-            os.system(
-                f'''
-                CUDA_VISIBLE_DEVICES={CUDA_VISIBLE_DEVICES} python ./evaluations/evaluator.py \
-                {ref_batch} "{npz}" --classifier_path {eval_classifier} --label {label} --output_path "{logdir}/log.json"
-                ''')
+            # check if the evaluation is already done before
+            if not (os.path.exists(f'{logdir}/log.json') and os.path.exists(img)):
+                # run the evaluation
+                os.system(
+                    f'''
+                    CUDA_VISIBLE_DEVICES={CUDA_VISIBLE_DEVICES} python ./evaluations/evaluator.py \
+                    "{ref_batch}" "{npz}" --classifier_path {eval_classifier} --label {label} --output_path "{logdir}/log.json"
+                    ''')
 
             # check if the evaluation is already done before
             if os.path.exists(f'{logdir}/log.json') and os.path.exists(img):

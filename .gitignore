@@ -9,3 +9,7 @@ datasets
 results
 wandb
 ckpts
+evaluations/ref
+logs
+temp*
+.vscode

@@ -55,6 +55,8 @@ def main():
 
     logger.log("loading classifier...")
     classifier = create_classifier(**args_to_dict(args, classifier_defaults().keys()))
+    # from PyTorch_CIFAR10.cifar10_models import resnet
+    # classifier = resnet.resnet50()
     classifier.load_state_dict(
         dist_util.load_state_dict(args.classifier_path, map_location="cpu")
     )

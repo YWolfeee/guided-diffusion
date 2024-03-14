@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import torch.nn as nn
 
+from guided_diffusion.celebA.model import Backbone
 
 def conv3x3(in_planes, out_planes, stride=1):
     """3x3 convolution with padding"""
@@ -211,30 +212,74 @@ def load_model(model, model_path):
     model.load_state_dict(model_dict)
 
 def load_arcface(model_path, device):
-    model = resnet_face18(use_se=False)
+    # model = resnet_face18(use_se=False)
+    # model.eval()
+    # load_model(model, model_path)
+    # model.to(device)
+    # return model
+    model = Backbone(num_layers=50, drop_ratio=0.6, mode='ir_se')
+    model.load_state_dict(torch.load(model_path))
     model.eval()
-    load_model(model, model_path)
     model.to(device)
     return model
 
-def arcface_forward(model, data):
-    data = (data[:, 0, :, :] * 0.299 + data[:, 1, :, :] * 0.587 + data[:, 2, :, :] * 0.114).unsqueeze(1)
-    data = nn.functional.interpolate(data, size=128, mode='bilinear', align_corners=True)
-    output = model(data)
+def arcface_forward_path(model, path, device='cuda'):
+    image = Image.open(path).convert('RGB')
+    data = torch.tensor(np.array(image).transpose(2, 0, 1), device=device).unsqueeze(0) / 127.5 - 1
+    output = arcface_forward(model, data)
     return output
+
+
+def arcface_forward(model, data):
+    # data = (data[:, 0, :, :] * 0.299 + data[:, 1, :, :] * 0.587 + data[:, 2, :, :] * 0.114).unsqueeze(1)
+    # data = nn.functional.interpolate(data, size=128, mode='bilinear', align_corners=True)
+    # output = model(data)
+    # return output
+    data = (data - 0.5) / 0.5   # normalize
+    data = data[:, :, 35:223, 32:220]
+    face_pool = torch.nn.AdaptiveAvgPool2d((112, 112))
+    data = face_pool(data)
+    feature = model(data)
+    return feature
 
 def cosine(feat1, feat2):
     return nn.functional.cosine_similarity(feat1, feat2)
 
 if __name__ == '__main__':
-    with torch.no_grad():
-        model = load_arcface('/home/linhw/code/guided-diffusion/guided_diffusion/celebA/resnet18_110.pth', 'cuda')    
-        image = Image.open('/home/linhw/code/guided-diffusion/guided_diffusion/celebA/celeba_hq_256/00000.jpg').convert('L')
-        image.save('tmp.png')
-        image = Image.open('/home/linhw/code/guided-diffusion/guided_diffusion/celebA/celeba_hq_256/00000.jpg').convert('RGB')
-        data = torch.tensor(np.array(image).transpose(2, 0, 1)).unsqueeze(0) / 127.5 - 1
-        output = arcface_forward(model, data.cuda())
-        # data = ((data[0] + 1) * 127.5).cpu().numpy().astype(np.uint8).transpose(1, 2, 0)
+    # with torch.no_grad():
+    #     model = load_arcface('/home/linhw/code/guided-diffusion/guided_diffusion/celebA/resnet18_110.pth', 'cuda')    
+    #     image = Image.open('/home/linhw/code/guided-diffusion/guided_diffusion/celebA/celeba_hq_256/00000.jpg').convert('L')
+    #     image.save('tmp.png')
+    #     image = Image.open('/home/linhw/code/guided-diffusion/guided_diffusion/celebA/celeba_hq_256/00000.jpg').convert('RGB')
+    #     data = torch.tensor(np.array(image).transpose(2, 0, 1)).unsqueeze(0) / 127.5 - 1
+    #     output = arcface_forward(model, data.cuda())
+    #     # data = ((data[0] + 1) * 127.5).cpu().numpy().astype(np.uint8).transpose(1, 2, 0)
 
-        # Image.fromarray(data[:, :, 0]).save('tpm.png')
-        print(output.shape)
+    #     # Image.fromarray(data[:, :, 0]).save('tpm.png')
+    #     print(output.shape)
+    model = Backbone(num_layers=50, drop_ratio=0.6, mode='ir_se')
+    model.load_state_dict(torch.load('/home/linhw/code/guided-diffusion/ckpts/celebA/model_ir_se50.pth'))
+    model.eval()
+    face_pool = torch.nn.AdaptiveAvgPool2d((112, 112))
+
+    image1 = Image.open('/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/00000.jpg').convert('RGB')
+    data1 = torch.tensor(np.array(image1).transpose(2, 0, 1)).unsqueeze(0) / 127.5 - 1
+    data1 = (data1 - 0.5) / 0.5
+    data1 = face_pool(data1)
+    feature1 = model(data1)
+
+    image2 = Image.open('/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/00001.jpg').convert('RGB')
+    data2 = torch.tensor(np.array(image2).transpose(2, 0, 1)).unsqueeze(0) / 127.5 - 1
+    data2 = (data2 - 0.5) / 0.5
+    data2 = face_pool(data2)
+    feature2 = model(data2)
+
+    image3 = Image.open('/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/29894.jpg').convert('RGB')
+    data3 = torch.tensor(np.array(image3).transpose(2, 0, 1)).unsqueeze(0) / 127.5 - 1
+    data3 = (data3 - 0.5) / 0.5
+    data3 = face_pool(data3)
+    feature3 = model(data3)
+
+    print(nn.functional.cosine_similarity(feature1, feature2))
+    print(nn.functional.cosine_similarity(feature1, feature3))
+    print(nn.functional.cosine_similarity(feature3, feature2))

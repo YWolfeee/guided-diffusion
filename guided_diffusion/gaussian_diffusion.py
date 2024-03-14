@@ -259,6 +259,10 @@ class GaussianDiffusion:
         B, C = x.shape[:2]
         assert t.shape == (B,)
         model_output = model(x, self._scale_timesteps(t), **model_kwargs)
+        try:
+            shape = model_output.shape
+        except:
+            model_output = model_output[0]
 
         if self.model_var_type in [ModelVarType.LEARNED, ModelVarType.LEARNED_RANGE]:
             assert model_output.shape == (B, C * 2, *x.shape[2:])
@@ -373,7 +377,6 @@ class GaussianDiffusion:
         elif model_kwargs['guide_mode'] == 'manifold':
             gradient = cond_fn(p_mean_var["pred_xstart"], self._scale_timesteps(th.zeros_like(t)), **model_kwargs)
             sqrt_acum = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape) ** 0.5
-
             new_mean = p_mean_var["mean"].float() + sqrt_acum * gradient.float()
         return new_mean
 
@@ -409,9 +412,13 @@ class GaussianDiffusion:
             
         
         elif model_kwargs['guide_mode'] in ['guide_x0', 'manifold']:
-            out["pred_xstart"] = p_mean_var["pred_xstart"] + cond_fn(
-                p_mean_var["pred_xstart"], self._scale_timesteps(th.zeros_like(t)), **model_kwargs
-            )
+            pred_xs = p_mean_var['pred_xstart']
+            for _ in range(50):
+                cond_score = cond_fn(
+                    pred_xs, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
+                )
+                pred_xs = pred_xs + cond_score
+                out["pred_xstart"] = pred_xs
             # manifold does not update eps using new x0. guide_x0 does.
             if model_kwargs['guide_mode'] == 'guide_x0':
                 out["eps"] = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
@@ -458,6 +465,18 @@ class GaussianDiffusion:
                 scores = fs
 
             xstart += scores
+            real  = (self.betas * (1-self.alphas_cumprod_prev)/(1 - self.alphas_cumprod))**0.5
+            x0_p = self.betas * (self.alphas_cumprod_prev) ** 0.5 / (1-self.alphas_cumprod)
+            x0_i = self.alphas_cumprod_prev ** 0.5 - self.sqrt_alphas_cumprod * (1 - self.alphas_cumprod_prev) ** 0.5 / self.sqrt_one_minus_alphas_cumprod
+            xt_p = self.sqrt_alphas_cumprod * (1-self.alphas_cumprod_prev)/(1-self.alphas_cumprod)
+            xt_i = ((1-self.alphas_cumprod_prev)/(1-self.alphas_cumprod))**0.5
+            # add_noise = False
+            # if add_noise and t[0].item() > 0:
+            #     noise = th.randn_like(x)
+            #     coef = _extract_into_tensor(real / x0_i, t, x.shape)
+            #     xstart += coef * noise
+            # rate = th.clip(_extract_into_tensor(xt_p/xt_i, t, x.shape), min=None, max=1) if t[0].item() > 0 else 1
+            # xstart += rate * _extract_into_tensor(x0_p/x0_i, t, x.shape) * scores
                             
             p_mean = th.mean(ps ** 2).item()
             f_mean = th.mean(fs ** 2).item()
@@ -555,6 +574,7 @@ class GaussianDiffusion:
         model_kwargs=None,
         device=None,
         progress=False,
+        eta=1.0,
     ):
         """
         Generate samples from the model.
@@ -575,6 +595,7 @@ class GaussianDiffusion:
         :param progress: if True, show a tqdm progress bar.
         :return: a non-differentiable batch of samples.
         """
+        del eta # Not used for DDPM
         final = None
         for sample in self.p_sample_loop_progressive(
             model,
@@ -666,7 +687,7 @@ class GaussianDiffusion:
             model_kwargs=model_kwargs,
         )
 
-        if cond_fn is not None:
+        if cond_fn is not None and True:
             out = self.condition_score(cond_fn, out, x, t, model=model, model_kwargs=model_kwargs)
         eps = out['eps']
 

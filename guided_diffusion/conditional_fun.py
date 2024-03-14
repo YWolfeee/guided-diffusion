@@ -41,4 +41,15 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
     # if args.guide_mode in ["classifier", "guide_x0", "manifold", 'unbiased', "resample"]:
     # else:
     # raise ValueError(f"Unknown guide mode: {args.guide_mode}")
-    
+
+def get_target_cond_fn(classifier, tar_feat, args: Namespace):
+    from guided_diffusion.celebA.faceid import arcface_forward
+    def cond_fn (x, t, y=None, **kwargs):
+        with torch.enable_grad():
+            x_in = x.detach().requires_grad_(True)
+            feat = arcface_forward(classifier, x_in)
+            dist = torch.cosine_similarity(feat, tar_feat, dim=-1)
+            # dist = -torch.linalg.norm(feat - tar_feat, dim=-1)
+            print(dist.mean().item())
+            return torch.autograd.grad(dist.sum(), x_in)[0] * args.classifier_scale
+    return cond_fn

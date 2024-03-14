@@ -12,3 +12,7 @@ ckpts
 *.pth
 *.png
 *.jpg
+evaluations/ref
+logs
+temp*
+.vscode

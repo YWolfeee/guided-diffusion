@@ -9,3 +9,6 @@ datasets
 results
 wandb
 ckpts
+*.pth
+*.png
+*.jpg

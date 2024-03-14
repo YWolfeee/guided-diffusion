@@ -413,12 +413,11 @@ class GaussianDiffusion:
         
         elif model_kwargs['guide_mode'] in ['guide_x0', 'manifold']:
             pred_xs = p_mean_var['pred_xstart']
-            for _ in range(50):
-                cond_score = cond_fn(
-                    pred_xs, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
-                )
-                pred_xs = pred_xs + cond_score
-                out["pred_xstart"] = pred_xs
+            cond_score = cond_fn(
+                pred_xs, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
+            )
+            pred_xs = pred_xs + cond_score
+            out["pred_xstart"] = pred_xs
             # manifold does not update eps using new x0. guide_x0 does.
             if model_kwargs['guide_mode'] == 'guide_x0':
                 out["eps"] = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
@@ -671,6 +670,7 @@ class GaussianDiffusion:
         cond_fn=None,
         model_kwargs=None,
         eta=0.0,
+        iteration=10
     ):
         """
         Sample x_{t-1} from the model using DDIM.
@@ -687,8 +687,9 @@ class GaussianDiffusion:
             model_kwargs=model_kwargs,
         )
 
-        if cond_fn is not None and True:
-            out = self.condition_score(cond_fn, out, x, t, model=model, model_kwargs=model_kwargs)
+        if cond_fn is not None:
+            for _ in range(iteration):
+                out = self.condition_score(cond_fn, out, x, t, model=model, model_kwargs=model_kwargs)
         eps = out['eps']
 
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
@@ -760,6 +761,7 @@ class GaussianDiffusion:
         device=None,
         progress=False,
         eta=0.0,
+        iteration=10,
     ):
         """
         Generate samples from the model using DDIM.
@@ -778,6 +780,7 @@ class GaussianDiffusion:
             device=device,
             progress=progress,
             eta=eta,
+            iteration=iteration
         ):
             final = sample
         return final["sample"]
@@ -794,6 +797,7 @@ class GaussianDiffusion:
         device=None,
         progress=False,
         eta=0.0,
+        iteration=10
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
@@ -828,6 +832,7 @@ class GaussianDiffusion:
                     cond_fn=cond_fn,
                     model_kwargs=model_kwargs,
                     eta=eta,
+                    iteration=iteration
                 )
                 yield out
                 img = out["sample"]

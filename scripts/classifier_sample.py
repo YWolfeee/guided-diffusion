@@ -108,7 +108,8 @@ def main():
             cond_fn=cond_fn,
             device=dist_util.dev(),
             progress=args.progress,
-            eta=args.eta
+            eta=args.eta,
+            iteration=args.iteration
         )
         sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
         sample = sample.permute(0, 2, 3, 1)
@@ -196,6 +197,7 @@ def create_argparser():
         ref_batch=None,
         test_classifier_path="",
         model_id=None,
+        iteration=10
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(classifier_defaults())

@@ -60,6 +60,7 @@ def model_and_diffusion_defaults():
         resblock_updown=False,
         use_fp16=False,
         use_new_attention_order=False,
+        model_id=None,
     )
     res.update(diffusion_defaults())
     return res
@@ -95,25 +96,30 @@ def create_model_and_diffusion(
     resblock_updown,
     use_fp16,
     use_new_attention_order,
+    model_id = None,
 ):
-    model = create_model(
-        image_size,
-        num_channels,
-        num_res_blocks,
-        channel_mult=channel_mult,
-        learn_sigma=learn_sigma,
-        class_cond=class_cond,
-        use_checkpoint=use_checkpoint,
-        attention_resolutions=attention_resolutions,
-        num_heads=num_heads,
-        num_head_channels=num_head_channels,
-        num_heads_upsample=num_heads_upsample,
-        use_scale_shift_norm=use_scale_shift_norm,
-        dropout=dropout,
-        resblock_updown=resblock_updown,
-        use_fp16=use_fp16,
-        use_new_attention_order=use_new_attention_order,
-    )
+    if model_id is not None:
+        from diffusers import UNet2DModel
+        model = UNet2DModel.from_pretrained(model_id)
+    else:
+        model = create_model(
+            image_size,
+            num_channels,
+            num_res_blocks,
+            channel_mult=channel_mult,
+            learn_sigma=learn_sigma,
+            class_cond=class_cond,
+            use_checkpoint=use_checkpoint,
+            attention_resolutions=attention_resolutions,
+            num_heads=num_heads,
+            num_head_channels=num_head_channels,
+            num_heads_upsample=num_heads_upsample,
+            use_scale_shift_norm=use_scale_shift_norm,
+            dropout=dropout,
+            resblock_updown=resblock_updown,
+            use_fp16=use_fp16,
+            use_new_attention_order=use_new_attention_order,
+        )
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
         learn_sigma=learn_sigma,

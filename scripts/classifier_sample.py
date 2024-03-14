@@ -16,7 +16,7 @@ np.random.seed(0)
 th.manual_seed(0)
 
 from guided_diffusion import dist_util, logger
-from guided_diffusion.conditional_fun import get_cond_fn
+from guided_diffusion.conditional_fun import get_cond_fn, get_target_cond_fn
 from guided_diffusion.script_util import (
     NUM_CLASSES,
     model_and_diffusion_defaults,
@@ -30,14 +30,15 @@ from guided_diffusion.script_util import (
 
 def main():
     args = create_argparser().parse_args()
-    args.log_dir = os.path.join(args.log_dir, f"mode={args.guide_mode}+scale={args.classifier_scale}")
-    logger.configure(dir=args.log_dir)
 
     if args.guide_mode in ["None", "none", None]:
         args.guide_mode = None
         args.classifier_scale = 0.0
+        args.positive_label = None
         logger.log("No classifier guidance will be used.")
     assert args.class_cond is False, "We focus on the setting where the diffusion mode is unconditional and the guidance is accomplished via an additional classifier."
+    args.log_dir = os.path.join(args.log_dir, f"mode={args.guide_mode}+scale={args.classifier_scale}")
+    logger.configure(dir=args.log_dir)
 
     dist_util.setup_dist()
 
@@ -45,27 +46,45 @@ def main():
     model, diffusion = create_model_and_diffusion(
         **args_to_dict(args, model_and_diffusion_defaults().keys())
     )
-    model.load_state_dict(
-        dist_util.load_state_dict(args.model_path, map_location="cpu")
-    )
+    if not args.model_id:   
+        model.load_state_dict(
+            dist_util.load_state_dict(args.model_path, map_location="cpu")
+        )
     model.to(dist_util.dev())
     if args.use_fp16:
         model.convert_to_fp16()
     model.eval()
 
     logger.log("loading classifier...")
-    classifier = create_classifier(**args_to_dict(args, classifier_defaults().keys()))
-    # from PyTorch_CIFAR10.cifar10_models import resnet
-    # classifier = resnet.resnet50()
-    classifier.load_state_dict(
-        dist_util.load_state_dict(args.classifier_path, map_location="cpu")
-    )
-    classifier.to(dist_util.dev())
-    if args.classifier_use_fp16:
-        classifier.convert_to_fp16()
-    classifier.eval()
-
-    cond_fn, model_kwargs = get_cond_fn(classifier, args)
+    if args.classifier_path == "" or args.positive_label == "" or args.guide_mode is None:
+        print("No guidance considered. Skipping classifier loading.")
+        classifier = None
+        cond_fn = None
+        model_kwargs = {"guide_mode": args.guide_mode,
+                    "classifier_scale": args.classifier_scale,
+                    "positive_label": args.positive_label}
+    elif args.positive_label.endswith(".jpg") or args.positive_label.endswith(".png"):
+        pass
+        # guide with images
+        from guided_diffusion.celebA.faceid import load_arcface, arcface_forward_path
+        classifier = load_arcface(args.classifier_path, dist_util.dev())
+        tar_feat = arcface_forward_path(classifier, args.positive_label, dist_util.dev())
+        model_kwargs = {"guide_mode": args.guide_mode,
+                    "classifier_scale": args.classifier_scale,
+                    "positive_label": args.positive_label}
+        cond_fn = get_target_cond_fn(classifier, tar_feat, args)
+    else:
+        classifier = create_classifier(**args_to_dict(args, classifier_defaults().keys()))
+        # from PyTorch_CIFAR10.cifar10_models import resnet
+        # classifier = resnet.resnet50()
+        classifier.load_state_dict(
+            dist_util.load_state_dict(args.classifier_path, map_location="cpu")
+        )
+        classifier.to(dist_util.dev())
+        if args.classifier_use_fp16:
+            classifier.convert_to_fp16()
+        classifier.eval()
+        cond_fn, model_kwargs = get_cond_fn(classifier, args)
 
     def model_fn(x, t, y=None,**kwargs):
         # assert y is not None
@@ -77,7 +96,7 @@ def main():
     all_labels = []
     while len(all_images) * args.batch_size < args.num_samples:
         start = time.time()
-        classes = model_kwargs["y"]
+        
         sample_fn = (
             diffusion.p_sample_loop if not args.use_ddim else diffusion.ddim_sample_loop
         )
@@ -98,16 +117,21 @@ def main():
         gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
         dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
         all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
-        gathered_labels = [th.zeros_like(classes) for _ in range(dist.get_world_size())]
-        dist.all_gather(gathered_labels, classes)
-        all_labels.extend([labels.cpu().numpy() for labels in gathered_labels])
+        if 'y' in model_kwargs:
+            classes = model_kwargs["y"]
+            gathered_labels = [th.zeros_like(classes) for _ in range(dist.get_world_size())]
+            dist.all_gather(gathered_labels, classes)
+            all_labels.extend([labels.cpu().numpy() for labels in gathered_labels])
         end = time.time()
         logger.log(f"created {len(all_images) * args.batch_size} samples, {end - start:.01f} sec per batch")
 
     arr = np.concatenate(all_images, axis=0)
     arr = arr[: args.num_samples]
-    label_arr = np.concatenate(all_labels, axis=0)
-    label_arr = label_arr[: args.num_samples]
+    if 'y' in model_kwargs:
+        label_arr = np.concatenate(all_labels, axis=0)
+        label_arr = label_arr[: args.num_samples]
+    else:
+        label_arr = None
     if dist.get_rank() == 0:
         shape_str = "x".join([str(x) for x in arr.shape])
         out_path = os.path.join(logger.get_dir(), f"samples_{shape_str}.npz")
@@ -166,11 +190,12 @@ def create_argparser():
         classifier_path="",
         guide_mode="None",
         classifier_scale=0.0,
-        positive_label=0,
+        positive_label="None",
         progress=False,
         eta=0.0,
         ref_batch=None,
         test_classifier_path="",
+        model_id=None,
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(classifier_defaults())

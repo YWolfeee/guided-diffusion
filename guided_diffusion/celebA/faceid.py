@@ -217,6 +217,13 @@ def load_arcface(model_path, device):
     model.to(device)
     return model
 
+def arcface_forward_path(model, path, device='cuda'):
+    image = Image.open(path).convert('RGB')
+    data = torch.tensor(np.array(image).transpose(2, 0, 1), device=device).unsqueeze(0) / 127.5 - 1
+    output = arcface_forward(model, data)
+    return output
+
+
 def arcface_forward(model, data):
     data = (data[:, 0, :, :] * 0.299 + data[:, 1, :, :] * 0.587 + data[:, 2, :, :] * 0.114).unsqueeze(1)
     data = nn.functional.interpolate(data, size=128, mode='bilinear', align_corners=True)

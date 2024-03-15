@@ -197,7 +197,8 @@ def create_argparser():
         ref_batch=None,
         test_classifier_path="",
         model_id=None,
-        iteration=10
+        iteration=10,
+        faceid_loss_type='cosine'
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(classifier_defaults())

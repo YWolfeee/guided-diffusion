@@ -48,8 +48,12 @@ def get_target_cond_fn(classifier, tar_feat, args: Namespace):
         with torch.enable_grad():
             x_in = x.detach().requires_grad_(True)
             feat = arcface_forward(classifier, x_in)
-            dist = torch.cosine_similarity(feat, tar_feat, dim=-1)
-            # dist = -torch.linalg.norm(feat - tar_feat, dim=-1)
+            if args.faceid_loss_type == 'cosine':
+                dist = torch.cosine_similarity(feat, tar_feat, dim=-1)
+            elif args.faceid_loss_type == 'l2':
+                dist = - torch.linalg.norm(feat - tar_feat, dim=-1)
+            else:
+                raise NotImplementedError
             print(dist.mean().item())
             return torch.autograd.grad(dist.sum(), x_in)[0] * args.classifier_scale
     return cond_fn

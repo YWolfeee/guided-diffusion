@@ -14,7 +14,7 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
     model_kwargs = {"guide_mode": args.guide_mode,
                     "classifier_scale": args.classifier_scale,
                     "positive_label": args.positive_label}
-    model_kwargs["y"] = args.positive_label * torch.ones((args.batch_size,), device=dist_util.dev(), dtype=torch.int)
+    model_kwargs["y"] = int(args.positive_label) * torch.ones((args.batch_size,), device=dist_util.dev(), dtype=torch.int)
     if args.guide_mode in ["None", "none", None]:
         return None, model_kwargs
     elif args.guide_mode == 'freedom':

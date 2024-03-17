@@ -670,7 +670,7 @@ class GaussianDiffusion:
         cond_fn=None,
         model_kwargs=None,
         eta=0.0,
-        iteration=10
+        iteration=1,
     ):
         """
         Sample x_{t-1} from the model using DDIM.
@@ -761,7 +761,7 @@ class GaussianDiffusion:
         device=None,
         progress=False,
         eta=0.0,
-        iteration=10,
+        iteration=1,
     ):
         """
         Generate samples from the model using DDIM.
@@ -797,7 +797,7 @@ class GaussianDiffusion:
         device=None,
         progress=False,
         eta=0.0,
-        iteration=10
+        iteration=1,
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
@@ -847,15 +847,19 @@ class GaussianDiffusion:
         cond_fn=None,
         model_kwargs=None,
         eta=0.0,
-        iteration=10,
+        iteration=5,
+        shrink_cond_x0=True,
     ):
         """
-        Sample x_{t-1} from the model using DDIM.
-
-        Same usage as p_sample().
+            eta is not used in the algorithm.
+            iteration is regarded as number of epoch gap between two alignment.
+            update_order is the order of updating x0 and x_t, 
+            shrink_cond_x0 specifies whether the variable fed into cond_fn is the shrink mean or the original mean.
         """
+        del eta
 
         xt, shr_x0 = inp['sample'], inp['shrink_xstart']
+        x0 = shr_x0 / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)   # computes m_t = \sqrt{alpha_t} * M_t, the unshrink mean
         noise = th.randn_like(xt)
         var = _extract_into_tensor(self.posterior_variance, t, xt.shape)
         coef = th.sqrt(var) * (
@@ -866,24 +870,13 @@ class GaussianDiffusion:
         # noise = 0.5 * (noise + th.randn_like(xt))   # import randomness
         func = partial(self.p_mean_variance, model=model, clip_denoised=clip_denoised, denoised_fn=denoised_fn, model_kwargs=model_kwargs)
         eps = func(x=xt, t=t)['eps']
+        # estimate sigma * nabla^2 log p(x_t) @ noise via finite difference
         jvp = 1000 * (func(x=xt+sigma * noise / 1000, t=t)['eps'] - eps)
-        shr_pred = shr_x0 / th.sqrt(1-_extract_into_tensor(self.betas, t, xt.shape)) + coef * (noise - jvp)
+        # also compute the ddim x_{0|t} that is used to align
         real = xt - sigma * eps
+        # update shrink_mean
+        shr_pred = shr_x0 / th.sqrt(1-_extract_into_tensor(self.betas, t, xt.shape)) + coef * (noise - jvp)
 
-            
-
-
-        # shr_pred += coef * (noise - jvp_est) 
-        # diff = th.zeros_like(xt)
-        # if t[0].item() > 0:
-        #     eps = func(x=xt, t=t)['eps']
-        #     shr_pred = xt - sigma * eps
-        # else:
-        #     shr_pred = shr_x0 / th.sqrt(1-_extract_into_tensor(self.betas, t, xt.shape))
-        #     dmt = shr_pred - shr_x0
-
-        # noise = th.randn_like(xt) # renew noise
-        # shr_pred = shr_x0 / th.sqrt(1-_extract_into_tensor(self.betas, t, xt.shape))
         # with th.enable_grad():
         #     x = xt.detach().requires_grad_(True)
         #     eps = self.p_mean_variance(
@@ -898,22 +891,22 @@ class GaussianDiffusion:
         #     vp =  th.sum(eps * noise)
         #     jvp = th.autograd.grad(vp, x)[0].detach() * _extract_into_tensor(
         #         self.sqrt_one_minus_alphas_cumprod, t, xt.shape)
-        # shr_pred += coef * (noise - jvp)
+        # shr_pred = shr_x0 / th.sqrt(1-_extract_into_tensor(self.betas, t, xt.shape)) + coef * (noise - jvp)
+
         dmt = shr_pred - shr_x0
         diff = shr_pred - real
-        if t[0].item() % 10 == 0:
-            shr_pred = real # recover each 20 iterations
+        if t[0].item() % iteration == 0:
+            shr_pred = real # align with x_{0|t} after `iteration` steps
         if model_kwargs['guide_mode'] == 'manifold':
-            cond_score = cond_fn(
-                shr_pred, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
-            )
             sqrt_acum = _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
+            in_x = shr_pred if shrink_cond_x0 else shr_pred / sqrt_acum
+            cond_score = cond_fn(
+                in_x, self._scale_timesteps(th.zeros_like(t)), **model_kwargs)
             shr_pred = shr_pred + sqrt_acum * cond_score
-
-        x0 = shr_pred / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
+        
         mean_pred, _, _ = self.q_posterior_mean_variance(x0, xt, t)
-        sample = mean_pred + coef * noise
-
+        sample = mean_pred + coef * noise    
+        
         from guided_diffusion import logger
         tn = lambda x: th.mean(x ** 2).item()
         logger.log(f"t:{t[0].item()}. [2-norm] xt-1: {tn(sample):.2e}, shrink: {tn(shr_pred):.2e}, jvp: {tn(dmt):.2e}, diff-jvp: {tn(diff):.2e}")
@@ -931,7 +924,7 @@ class GaussianDiffusion:
         device=None,
         progress=False,
         eta=0.0,
-        iteration=10,
+        iteration=5,
     ):
         """
         Generate samples from the model using DDIM.
@@ -967,7 +960,7 @@ class GaussianDiffusion:
         device=None,
         progress=False,
         eta=0.0,
-        iteration=10
+        iteration=5,
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from

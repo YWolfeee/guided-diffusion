@@ -905,53 +905,6 @@ class GaussianDiffusion:
             cond_score = cond_fn(
                 in_x, self._scale_timesteps(th.zeros_like(t)), **model_kwargs)
             shr_pred = shr_pred + sqrt_acum * cond_score
-
-        elif 'dynamic' in model_kwargs['guide_mode']:
-
-            sqrt_acum = _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
-            
-            ca_t = _extract_into_tensor(self.alphas_cumprod, t, xt.shape)
-            xstart = shr_pred if shrink_cond_x0 else shr_pred / sqrt_acum
-            
-            fs = cond_fn(
-                xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
-            ) * (1-ca_t)
-            
-            ps = -(1-ca_t)**0.5 * self.p_mean_variance(model=model, x=xstart, t=th.zeros_like(t))['eps']
-            
-            gs = (ca_t) ** 0.5 * (xt - ca_t**0.5 * xstart)
-
-            # sum over scores based on strategy
-            scores = 0
-            if model_kwargs['guide_mode'] == 'dynamic-full-0.5*a*(1-a)':
-                scores = 0.5 * ca_t * (1-ca_t) * (fs + ps + gs)
-            elif model_kwargs['guide_mode'] == 'dynamic-full-0.1*a*(1-a)':
-                scores = 0.1 * ca_t * (1-ca_t) * (fs + ps + gs)
-            elif model_kwargs['guide_mode'] == 'dynamic-two-0.5*a*(1-a)':
-                scores = fs + 0.5 * ca_t * (1-ca_t) * (ps + gs)
-            elif model_kwargs['guide_mode'] == 'dynamic-two-0.1*a*(1-a)':
-                scores = fs + 0.1 * ca_t * (1-ca_t) * (ps + gs)
-            elif model_kwargs['guide_mode'] == 'dynamic-two-0.5*a-0.5*(1-a)':
-                scores = fs + 0.5 * ca_t * ps + 0.5 * (1-ca_t) * gs
-            elif model_kwargs['guide_mode'] == 'dynamic-two-0.1*a-0.1*(1-a)':
-                scores = fs + 0.1 * ca_t * ps + 0.1 * (1-ca_t) * gs
-            elif model_kwargs['guide_mode'] == 'dynamic-one-0.5*(1-a)':
-                scores = fs + ps + 0.5 * (1-ca_t) * gs
-            elif model_kwargs['guide_mode'] == 'dynamic-one-0.1*(1-a)':
-                scores = fs + ps + 0.1 * (1-ca_t) * gs
-            elif model_kwargs['guide_mode'] == 'dynamic-nog-0.5*a':
-                scores = fs + 0.5 * ca_t * ps
-            elif model_kwargs['guide_mode'] == 'dynamic-nog-0.1*a':
-                scores = fs + 0.1 * ca_t * ps
-            elif model_kwargs['guide_mode'] == 'dynamic-nog-0.5':
-                scores = fs + 0.5 * ps
-            elif model_kwargs['guide_mode'] == 'dynamic-nog-0.1':
-                scores = fs + 0.1 * ps
-            elif model_kwargs['guide_mode'] == 'dynamic-fonly':
-                # This should match guide_x0
-                scores = fs
-            
-            shr_pred = shr_pred + sqrt_acum * scores
     
         
         mean_pred, _, _ = self.q_posterior_mean_variance(x0, xt, t)

@@ -836,6 +836,179 @@ class GaussianDiffusion:
                 )
                 yield out
                 img = out["sample"]
+    
+    def ddjm_sample(
+        self,
+        model,
+        inp,
+        t,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+        eta=0.0,
+        iteration=10,
+    ):
+        """
+        Sample x_{t-1} from the model using DDIM.
+
+        Same usage as p_sample().
+        """
+
+        xt, shr_x0 = inp['sample'], inp['shrink_xstart']
+        noise = th.randn_like(xt)
+        var = _extract_into_tensor(self.posterior_variance, t, xt.shape)
+        coef = th.sqrt(var) * (
+            (t != 0).float().view(-1, *([1] * (len(xt.shape) - 1)))
+        )  # no noise when t == 0
+        sigma = _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, xt.shape)
+
+        # noise = 0.5 * (noise + th.randn_like(xt))   # import randomness
+        func = partial(self.p_mean_variance, model=model, clip_denoised=clip_denoised, denoised_fn=denoised_fn, model_kwargs=model_kwargs)
+        eps = func(x=xt, t=t)['eps']
+        jvp = 1000 * (func(x=xt+sigma * noise / 1000, t=t)['eps'] - eps)
+        shr_pred = shr_x0 / th.sqrt(1-_extract_into_tensor(self.betas, t, xt.shape)) + coef * (noise - jvp)
+        real = xt - sigma * eps
+
+            
+
+
+        # shr_pred += coef * (noise - jvp_est) 
+        # diff = th.zeros_like(xt)
+        # if t[0].item() > 0:
+        #     eps = func(x=xt, t=t)['eps']
+        #     shr_pred = xt - sigma * eps
+        # else:
+        #     shr_pred = shr_x0 / th.sqrt(1-_extract_into_tensor(self.betas, t, xt.shape))
+        #     dmt = shr_pred - shr_x0
+
+        # noise = th.randn_like(xt) # renew noise
+        # shr_pred = shr_x0 / th.sqrt(1-_extract_into_tensor(self.betas, t, xt.shape))
+        # with th.enable_grad():
+        #     x = xt.detach().requires_grad_(True)
+        #     eps = self.p_mean_variance(
+        #         model,
+        #         x,
+        #         t,
+        #         clip_denoised=clip_denoised,
+        #         denoised_fn=denoised_fn,
+        #         model_kwargs=model_kwargs,
+        #     )['eps']
+        #     real = (xt - sigma * eps).detach()
+        #     vp =  th.sum(eps * noise)
+        #     jvp = th.autograd.grad(vp, x)[0].detach() * _extract_into_tensor(
+        #         self.sqrt_one_minus_alphas_cumprod, t, xt.shape)
+        # shr_pred += coef * (noise - jvp)
+        dmt = shr_pred - shr_x0
+        diff = shr_pred - real
+        if t[0].item() % 10 == 0:
+            shr_pred = real # recover each 20 iterations
+        if model_kwargs['guide_mode'] == 'manifold':
+            cond_score = cond_fn(
+                shr_pred, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
+            )
+            sqrt_acum = _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
+            shr_pred = shr_pred + sqrt_acum * cond_score
+
+        x0 = shr_pred / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
+        mean_pred, _, _ = self.q_posterior_mean_variance(x0, xt, t)
+        sample = mean_pred + coef * noise
+
+        from guided_diffusion import logger
+        tn = lambda x: th.mean(x ** 2).item()
+        logger.log(f"t:{t[0].item()}. [2-norm] xt-1: {tn(sample):.2e}, shrink: {tn(shr_pred):.2e}, jvp: {tn(dmt):.2e}, diff-jvp: {tn(diff):.2e}")
+        return {"sample": sample, "shrink_xstart": shr_pred}
+
+    def ddjm_sample_loop(
+        self,
+        model,
+        shape,
+        noise=None,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+        device=None,
+        progress=False,
+        eta=0.0,
+        iteration=10,
+    ):
+        """
+        Generate samples from the model using DDIM.
+
+        Same usage as p_sample_loop().
+        """
+        final = None
+        for sample in self.ddjm_sample_loop_progressive(
+            model,
+            shape,
+            noise=noise,
+            clip_denoised=clip_denoised,
+            denoised_fn=denoised_fn,
+            cond_fn=cond_fn,
+            model_kwargs=model_kwargs,
+            device=device,
+            progress=progress,
+            eta=eta,
+            iteration=iteration
+        ):
+            final = sample
+        return final["sample"]
+
+    def ddjm_sample_loop_progressive(
+        self,
+        model,
+        shape,
+        noise=None,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+        device=None,
+        progress=False,
+        eta=0.0,
+        iteration=10
+    ):
+        """
+        Use DDIM to sample from the model and yield intermediate samples from
+        each timestep of DDIM.
+
+        Same usage as p_sample_loop_progressive().
+        """
+        if device is None:
+            device = next(model.parameters()).device
+        assert isinstance(shape, (tuple, list))
+        if noise is not None:
+            img = noise
+        else:
+            img = th.randn(*shape, device=device)
+        indices = list(range(self.num_timesteps))[::-1]
+
+        if progress:
+            # Lazy import so that we don't depend on tqdm.
+            from tqdm.auto import tqdm
+
+            indices = tqdm(indices)
+
+        out = {
+            "sample": img,
+            "shrink_xstart": th.zeros_like(img),
+        }
+        for i in indices:
+            t = th.tensor([i] * shape[0], device=device)
+            with th.no_grad():
+                out = self.ddjm_sample(
+                    model,
+                    out,
+                    t,
+                    clip_denoised=clip_denoised,
+                    denoised_fn=denoised_fn,
+                    cond_fn=cond_fn,
+                    model_kwargs=model_kwargs,
+                    eta=eta,
+                    iteration=iteration
+                )
+                yield out
 
     def _vb_terms_bpd(
         self, model, x_start, x_t, t, clip_denoised=True, model_kwargs=None

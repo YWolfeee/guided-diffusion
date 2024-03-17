@@ -91,15 +91,16 @@ def main():
         return model(x, t, y if args.class_cond else None)
         # return model(x, t, y if args.guide_mode is not None else None)
 
+    assert args.use_ddim ^ args.use_ddjm
+    sample_fn = (diffusion.ddim_sample_loop if args.use_ddim else (
+                 diffusion.ddjm_sample_loop if args.use_ddjm else 
+                 diffusion.p_sample_loop))
     logger.log("sampling...")
     all_images = []
     all_labels = []
     while len(all_images) * args.batch_size < args.num_samples:
         start = time.time()
         
-        sample_fn = (
-            diffusion.p_sample_loop if not args.use_ddim else diffusion.ddim_sample_loop
-        )
         sample = sample_fn(
             model_fn,
             (args.batch_size, 3, args.image_size, args.image_size),
@@ -186,6 +187,7 @@ def create_argparser():
         num_samples=10000,
         batch_size=16,
         use_ddim=False,
+        use_ddjm=False,
         model_path="",
         log_dir="tmp",
         classifier_path="",

@@ -111,7 +111,8 @@ def main():
             device=dist_util.dev(),
             progress=args.progress,
             eta=args.eta,
-            iteration=args.iteration
+            iteration=args.iteration,
+            shrink_cond_x0=args.shrink_cond_x0,
         )
         sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
         sample = sample.permute(0, 2, 3, 1)
@@ -204,6 +205,7 @@ def create_argparser():
         test_classifier_path="",
         model_id=None,
         iteration=10,
+        shrink_cond_x0=True,    # whether to shrink the score of x0 by at
         faceid_loss_type='cosine'
     )
     defaults.update(model_and_diffusion_defaults())

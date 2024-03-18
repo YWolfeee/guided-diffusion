@@ -574,6 +574,8 @@ class GaussianDiffusion:
         device=None,
         progress=False,
         eta=1.0,
+        iteration=1,
+        shrink_cond_x0=True,
     ):
         """
         Generate samples from the model.
@@ -594,7 +596,7 @@ class GaussianDiffusion:
         :param progress: if True, show a tqdm progress bar.
         :return: a non-differentiable batch of samples.
         """
-        del eta # Not used for DDPM
+        del eta, iteration, shrink_cond_x0 # Not used for DDPM
         final = None
         for sample in self.p_sample_loop_progressive(
             model,
@@ -762,12 +764,14 @@ class GaussianDiffusion:
         progress=False,
         eta=0.0,
         iteration=1,
+        shrink_cond_x0=True,
     ):
         """
         Generate samples from the model using DDIM.
 
         Same usage as p_sample_loop().
         """
+        del shrink_cond_x0
         final = None
         for sample in self.ddim_sample_loop_progressive(
             model,
@@ -901,13 +905,14 @@ class GaussianDiffusion:
         
         if model_kwargs['guide_mode'] == 'manifold':
             sqrt_acum = _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
-            in_x = shr_pred if shrink_cond_x0 else shr_pred / sqrt_acum
+            in_x = shr_pred / sqrt_acum
             cond_score = cond_fn(
                 in_x, self._scale_timesteps(th.zeros_like(t)), **model_kwargs)
-            shr_pred = shr_pred + sqrt_acum * cond_score
+            cond_score = cond_score * sqrt_acum if shrink_cond_x0 else cond_score
+            shr_pred = shr_pred + cond_score
     
         
-        x0 = shr_x0 / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
+        x0 = shr_pred / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape) # we use post sampling such that ddjm1 equals to ddim
         mean_pred, _, _ = self.q_posterior_mean_variance(x0, xt, t)
         sample = mean_pred + coef * noise    
         
@@ -929,6 +934,7 @@ class GaussianDiffusion:
         progress=False,
         eta=0.0,
         iteration=5,
+        shrink_cond_x0=True,
     ):
         """
         Generate samples from the model using DDIM.
@@ -947,7 +953,8 @@ class GaussianDiffusion:
             device=device,
             progress=progress,
             eta=eta,
-            iteration=iteration
+            iteration=iteration,
+            shrink_cond_x0=shrink_cond_x0,
         ):
             final = sample
         return final["sample"]
@@ -965,6 +972,7 @@ class GaussianDiffusion:
         progress=False,
         eta=0.0,
         iteration=5,
+        shrink_cond_x0=True,
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
@@ -1003,7 +1011,8 @@ class GaussianDiffusion:
                     cond_fn=cond_fn,
                     model_kwargs=model_kwargs,
                     eta=eta,
-                    iteration=iteration
+                    iteration=iteration,
+                    shrink_cond_x0=shrink_cond_x0,
                 )
                 yield out
 

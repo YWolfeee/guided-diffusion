@@ -59,13 +59,13 @@ def main(args: argparse.Namespace):
 
     IS = evaluator.compute_inception_score(sample_acts[0])
     validity = round(validity, 4)
-    if sample_acts[0].shape[0] >= 2048:
-        FID = sample_stats.frechet_distance(ref_stats)
-        sFID = sample_stats_spatial.frechet_distance(ref_stats_spatial)
-    else:
-        logger.log("Sample batch too small to compute FID, using NaN")
-        FID = float("nan")
-        sFID = float("nan")
+    # if sample_acts[0].shape[0] >= 2048:
+    FID = sample_stats.frechet_distance(ref_stats)
+    sFID = sample_stats_spatial.frechet_distance(ref_stats_spatial)
+    # else:
+    #     logger.log("Sample batch too small to compute FID, using NaN")
+    #     FID = float("nan")
+    #     sFID = float("nan")
 
     res = {
         "validity": validity,

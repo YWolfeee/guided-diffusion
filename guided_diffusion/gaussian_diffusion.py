@@ -859,7 +859,7 @@ class GaussianDiffusion:
         del eta
 
         xt, shr_x0 = inp['sample'], inp['shrink_xstart']
-        x0 = shr_x0 / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)   # computes m_t = \sqrt{alpha_t} * M_t, the unshrink mean
+        # x0 = shr_x0 / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)   # computes m_t = \sqrt{alpha_t} * M_t, the unshrink mean
         noise = th.randn_like(xt)
         var = _extract_into_tensor(self.posterior_variance, t, xt.shape)
         coef = th.sqrt(var) * (
@@ -904,6 +904,7 @@ class GaussianDiffusion:
                 in_x, self._scale_timesteps(th.zeros_like(t)), **model_kwargs)
             shr_pred = shr_pred + sqrt_acum * cond_score
         
+        x0 = shr_x0 / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
         mean_pred, _, _ = self.q_posterior_mean_variance(x0, xt, t)
         sample = mean_pred + coef * noise    
         

@@ -1,5 +1,4 @@
 import json
-import torch
 import argparse
 import io
 import os
@@ -18,7 +17,6 @@ import requests
 import tensorflow.compat.v1 as tf
 from scipy import linalg
 from tqdm.auto import tqdm
-from torchmetrics.image.kid import KernelInceptionDistance
 
 from guided_diffusion import logger
 from evaluations.classifier import compute_accuracy
@@ -56,64 +54,32 @@ def main(args: argparse.Namespace):
     
     if args.classifier_path is not None:
         validity = compute_accuracy(args.classifier_path, args.sample_batch, args.label)
-    else:
-        validity = 0.0
-        
-    if False and args.kid:
-        kid = compute_kid(args.ref_batch, args.sample_batch, sample_num=1000)
-    else:
-        kid = 0.0
-    
+
     prec, recall = evaluator.compute_prec_recall(ref_acts[0], sample_acts[0])
 
     IS = evaluator.compute_inception_score(sample_acts[0])
     validity = round(validity, 4)
-    if sample_acts[0].shape[0] >= 10:
-        FID = sample_stats.frechet_distance(ref_stats)
-        sFID = sample_stats_spatial.frechet_distance(ref_stats_spatial)
-    else:
-        logger.log("Sample batch too small to compute FID, using NaN")
-        FID = float("nan")
-        sFID = float("nan")
+    # if sample_acts[0].shape[0] >= 2048:
+    FID = sample_stats.frechet_distance(ref_stats)
+    sFID = sample_stats_spatial.frechet_distance(ref_stats_spatial)
+    # else:
+    #     logger.log("Sample batch too small to compute FID, using NaN")
+    #     FID = float("nan")
+    #     sFID = float("nan")
 
     res = {
+        "validity": validity,
         "inception_score": IS,
         "fid": FID,
         "sfid": sFID,
         "precision": prec,
         "recall": recall,
     }
-    if False and args.kid:
-        res['kid'] = kid
-    if args.classifier_path:
-        res['validity'] = validity
     
     logger.log(res)
     if args.output_path is not None:
         with open(args.output_path, 'w') as f:
             json.dump(res, f)
-
-
-def compute_kid(ref_batch: str, sample_batch: str, sample_num: int):
-    bs = 32
-
-    ref_batch = np.load(ref_batch)['arr_0']
-    sample_batch = np.load(sample_batch)['arr_0'][:sample_num]
-
-    ref_batch = ref_batch.transpose(0, 3, 1, 2)
-    sample_batch = sample_batch.transpose(0, 3, 1, 2)
-
-    kid = KernelInceptionDistance().to('cuda')
-
-    for idx in range(0, len(ref_batch), bs):
-        kid.update(torch.tensor(ref_batch[idx:idx+bs, ...], dtype=torch.uint8).cuda(), real=True)
-    
-    for idx in range(0, len(sample_batch), bs):
-        kid.update(torch.tensor(sample_batch[idx:idx+bs, ...], dtype=torch.uint8).cuda(), real=False)
-
-    mean, std = kid.compute()
-
-    return mean.item(), std.item()
 
 
 class InvalidFIDException(Exception):
@@ -712,6 +678,5 @@ if __name__ == "__main__":
     parser.add_argument('--classifier_path', type=str, default=None)
     parser.add_argument('--label', type=int, default=None)
     parser.add_argument('--output_path', type=str, default=None)
-    parser.add_argument('--kid', action='store_true')
     args = parser.parse_args()
     main(args)

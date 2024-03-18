@@ -412,10 +412,11 @@ class GaussianDiffusion:
             
         
         elif model_kwargs['guide_mode'] in ['guide_x0', 'manifold']:
+            ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
             pred_xs = p_mean_var['pred_xstart']
             cond_score = cond_fn(
                 pred_xs, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
-            )
+            ) * (1-ca_t)
             pred_xs = pred_xs + cond_score
             out["pred_xstart"] = pred_xs
             # manifold does not update eps using new x0. guide_x0 does.
@@ -431,7 +432,9 @@ class GaussianDiffusion:
                 xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
             ) * (1-ca_t)
             ps = -(1-ca_t)**0.5 * self.p_mean_variance(model=model, x=xstart, t=th.zeros_like(t))['eps']
+            # ps = th.zeros_like(x)
             gs = (ca_t) ** 0.5 * (x - ca_t**0.5 * xstart)
+            # gs = th.zeros_like(x)
 
             # sum over scores based on strategy
             scores = 0
@@ -859,7 +862,7 @@ class GaussianDiffusion:
         del eta
 
         xt, shr_x0 = inp['sample'], inp['shrink_xstart']
-        x0 = shr_x0 / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)   # computes m_t = \sqrt{alpha_t} * M_t, the unshrink mean
+        # x0 = shr_x0 / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)   # computes m_t = \sqrt{alpha_t} * M_t, the unshrink mean
         noise = th.randn_like(xt)
         var = _extract_into_tensor(self.posterior_variance, t, xt.shape)
         coef = th.sqrt(var) * (
@@ -907,6 +910,7 @@ class GaussianDiffusion:
             shr_pred = shr_pred + sqrt_acum * cond_score
     
         
+        x0 = shr_pred / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
         mean_pred, _, _ = self.q_posterior_mean_variance(x0, xt, t)
         sample = mean_pred + coef * noise    
         

@@ -43,7 +43,10 @@ def get_dataloader(train_dir, batch_size, image_size, random_crop=True):
 @torch.no_grad()
 def compute_accuracy(model_path_or_model, npz_path, label=None):
 
-    npz = np.load(npz_path)
+    npz = np.load(npz_path, allow_pickle=True)
+    if npz['arr_1'].shape == ():
+        print('No label in npz file, skip accuracy computation')
+        return 0.0
 
     if 'cifar' in model_path_or_model:
         

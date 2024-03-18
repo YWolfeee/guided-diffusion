@@ -4,7 +4,7 @@ from typing import Tuple, Union
 import torch
 from torch import nn
 import torch.nn.functional as F
-
+from guided_diffusion import logger
 from guided_diffusion import dist_util
 from .unet import EncoderUNetModel
 
@@ -44,6 +44,26 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
 
 def get_target_cond_fn(classifier, tar_feat, args: Namespace):
     from guided_diffusion.celebA.faceid import arcface_forward
+    from PIL import Image
+    import numpy as np
+
+    with torch.no_grad():
+        image1 = Image.open(f'/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/{args.face_image1_id}.jpg').convert('RGB')
+        data1 = torch.tensor(np.array(image1).transpose(2, 0, 1), device='cuda').unsqueeze(0) / 127.5 - 1
+
+        image2 = Image.open(f'/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/{args.face_image2_id}.jpg').convert('RGB')
+        data2 = torch.tensor(np.array(image2).transpose(2, 0, 1), device='cuda').unsqueeze(0) / 127.5 - 1
+
+        image3 = Image.open(f'/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/{args.face_image3_id}.jpg').convert('RGB')
+        data3 = torch.tensor(np.array(image3).transpose(2, 0, 1), device='cuda').unsqueeze(0) / 127.5 - 1
+            
+        output1 = arcface_forward(classifier, data1)
+        output2 = arcface_forward(classifier, data2)
+        output3 = arcface_forward(classifier, data3)
+        target_feat1 = output1
+        target_feat2 = output2
+        target_feat3 = output3
+
     def cond_fn (x, t, y=None, **kwargs):
         with torch.enable_grad():
             x_in = x.detach().requires_grad_(True)
@@ -51,9 +71,33 @@ def get_target_cond_fn(classifier, tar_feat, args: Namespace):
             if args.faceid_loss_type == 'cosine':
                 dist = torch.cosine_similarity(feat, tar_feat, dim=-1)
             elif args.faceid_loss_type == 'l2':
-                dist = - torch.linalg.norm(feat - tar_feat, dim=-1)
+
+                dist1 = - torch.linalg.norm(feat - target_feat1, dim=-1) \
+                    + (- torch.linalg.norm(feat - target_feat2, dim=-1)) \
+                    + (- torch.linalg.norm(feat - target_feat3, dim=-1))
+                # dist1 = - torch.linalg.norm(feat - target_feat1, dim=-1)
+
+                # dist2 = - torch.linalg.norm(data1 - x_in, dim=-1).mean(dim=-1).mean(dim=-1)
+                dist2 = (- torch.linalg.norm(data1 - x_in, dim=-1) + \
+                        (- torch.linalg.norm(data2 - x_in, dim=-1)) + \
+                        (- torch.linalg.norm(data3 - x_in, dim=-1)) ).mean(dim=-1).mean(dim=-1)
+
+                logger.info('{} {}'.format(dist1.mean().item(), dist2.mean().item()))
+
+                dist = dist1 + dist2
             else:
                 raise NotImplementedError
-            print(dist.mean().item())
+            logger.info("{}".format(dist.mean().item()))
             return torch.autograd.grad(dist.sum(), x_in)[0] * args.classifier_scale
+    return cond_fn
+
+
+def get_clip_cond_fn(classifier, args: Namespace):
+    def cond_fn (x, t, y=None, **kwargs):
+        with torch.enable_grad():
+            x_in = x.detach().requires_grad_(True)
+            logits = classifier(x_in, x.device)
+            # logits = F.log_softmax(logits, dim=-1)[:, 1]
+            print(logits.mean().item())
+            return torch.autograd.grad(logits.sum(), x_in)[0] * args.classifier_scale
     return cond_fn

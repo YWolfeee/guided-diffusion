@@ -863,6 +863,7 @@ class GaussianDiffusion:
         del eta
 
         xt, shr_x0 = inp['sample'], inp['shrink_xstart']
+        sqrt_acum = _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
         # x0 = shr_x0 / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)   # computes m_t = \sqrt{alpha_t} * M_t, the unshrink mean
         noise = th.randn_like(xt)
         var = _extract_into_tensor(self.posterior_variance, t, xt.shape)
@@ -904,21 +905,38 @@ class GaussianDiffusion:
 
         
         if model_kwargs['guide_mode'] == 'manifold':
-            sqrt_acum = _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
+            
             in_x = shr_pred / sqrt_acum
-            cond_score = cond_fn(
+            fs = cond_fn(
                 in_x, self._scale_timesteps(th.zeros_like(t)), **model_kwargs)
-            cond_score = cond_score * sqrt_acum if shrink_cond_x0 else cond_score
-            shr_pred = shr_pred + cond_score
-    
+            fs = fs * sqrt_acum if shrink_cond_x0 else fs
+            shr_pred = shr_pred + fs
+        elif model_kwargs['guide_mode'] == 'dynamic':
+            # By default, dynamic correponds to dynamic-two-0.1*a*(1-a)
+            ca_t = sqrt_acum ** 2
+            in_x = shr_pred / sqrt_acum # This correspond to the x0
+            fs = cond_fn(in_x, self._scale_timesteps(th.zeros_like(t)), 
+                         **model_kwargs) #* (1-ca_t)
+            ps = -(1-ca_t)**0.5 * func(x=in_x, t=th.zeros_like(t))['eps']
+            # ps = th.zeros_like(in_x)
+            gs = (ca_t) ** 0.5 * (xt - ca_t**0.5 * in_x)
+            # gs = th.zeros_like(in_x)
+
+            scores = fs + 0.5 * ca_t * (1-ca_t) * (ps + gs)
+            scores = scores * sqrt_acum if shrink_cond_x0 else scores
+            shr_pred += scores
         
-        x0 = shr_pred / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape) # we use post sampling such that ddjm1 equals to ddim
+        x0 = shr_pred / sqrt_acum # we use post sampling: ddjm1 equals to ddim
         mean_pred, _, _ = self.q_posterior_mean_variance(x0, xt, t)
         sample = mean_pred + coef * noise    
         
         from guided_diffusion import logger
         tn = lambda x: th.mean(x ** 2).item()
         logger.log(f"t:{t[0].item()}. [2-norm] xt-1: {tn(sample):.2e}, shrink: {tn(shr_pred):.2e}, jvp: {tn(dmt):.2e}, diff-jvp: {tn(diff):.2e}")
+        if model_kwargs['guide_mode'] == 'manifold':
+            logger.log(f"      [2-norm] fs: {tn(fs):.2e}")
+        if model_kwargs['guide_mode'] == 'dynamic':
+            logger.log(f"      [2-norm] fs: {tn(fs):.2e}, ps: {tn(ps):.2e}, gs: {tn(gs):.2e}, scores: {tn(scores):.2e}")        
         return {"sample": sample, "shrink_xstart": shr_pred}
 
     def ddjm_sample_loop(

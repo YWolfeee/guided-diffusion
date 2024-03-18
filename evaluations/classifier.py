@@ -80,6 +80,8 @@ def compute_accuracy(model_path_or_model, npz_path, label=None):
     if label is None:
         label = torch.tensor(npz['arr_1']).cuda()
 
+    if type(label) == str:
+        label = int(label)
     acc = (preds == label).float().mean()
     return acc.item()
 

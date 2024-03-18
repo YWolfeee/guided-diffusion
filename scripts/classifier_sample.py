@@ -200,7 +200,10 @@ def create_argparser():
         test_classifier_path="",
         model_id=None,
         iteration=10,
-        faceid_loss_type='cosine'
+        faceid_loss_type='cosine',
+        face_image1_id='16239',
+        face_image2_id='27812',
+        face_image3_id='15148',
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(classifier_defaults())

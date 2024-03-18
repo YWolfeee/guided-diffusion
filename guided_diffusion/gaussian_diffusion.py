@@ -897,12 +897,15 @@ class GaussianDiffusion:
         diff = shr_pred - real
         if t[0].item() % iteration == 0:
             shr_pred = real # align with x_{0|t} after `iteration` steps
+
+        
         if model_kwargs['guide_mode'] == 'manifold':
             sqrt_acum = _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
             in_x = shr_pred if shrink_cond_x0 else shr_pred / sqrt_acum
             cond_score = cond_fn(
                 in_x, self._scale_timesteps(th.zeros_like(t)), **model_kwargs)
             shr_pred = shr_pred + sqrt_acum * cond_score
+    
         
         x0 = shr_x0 / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
         mean_pred, _, _ = self.q_posterior_mean_variance(x0, xt, t)

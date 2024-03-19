@@ -65,9 +65,18 @@ def get_target_cond_fn(classifier, tar_feat, args: Namespace):
         target_feat3 = output3
 
     def cond_fn (x, t, y=None, **kwargs):
+
         with torch.enable_grad():
-            x_in = x.detach().requires_grad_(True)
-            feat = arcface_forward(classifier, x_in)
+            if args.guide_mode == 'freedom' or args.guide_mode == 'ugd':
+                model_func = kwargs['out_func']
+                x_in = x.detach().requires_grad_(True)
+                x0 = model_func(x=x_in, t=t.long())['pred_xstart']
+                feat = arcface_forward(classifier, x0)
+            else:
+                x_in = x.detach().requires_grad_(True)
+                feat = arcface_forward(classifier, x_in)
+                x0 = x_in
+            
             if args.faceid_loss_type == 'cosine':
                 dist = torch.cosine_similarity(feat, tar_feat, dim=-1)
             elif args.faceid_loss_type == 'l2':
@@ -78,9 +87,9 @@ def get_target_cond_fn(classifier, tar_feat, args: Namespace):
                 # dist1 = - torch.linalg.norm(feat - target_feat1, dim=-1)
 
                 # dist2 = - torch.linalg.norm(data1 - x_in, dim=-1).mean(dim=-1).mean(dim=-1)
-                dist2 = (- torch.linalg.norm(data1 - x_in, dim=-1) + \
-                        (- torch.linalg.norm(data2 - x_in, dim=-1)) + \
-                        (- torch.linalg.norm(data3 - x_in, dim=-1)) ).mean(dim=-1).mean(dim=-1)
+                dist2 = (- torch.linalg.norm(data1 - x0, dim=-1) + \
+                        (- torch.linalg.norm(data2 - x0, dim=-1)) + \
+                        (- torch.linalg.norm(data3 - x0, dim=-1)) ).mean(dim=-1).mean(dim=-1)
 
                 logger.info('{} {}'.format(dist1.mean().item(), dist2.mean().item()))
 

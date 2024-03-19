@@ -403,13 +403,22 @@ class GaussianDiffusion:
         
         elif model_kwargs["guide_mode"] == 'freedom':
             from guided_diffusion.respace import SpacedDiffusion
-            unwrap_p_mean = super(SpacedDiffusion, self).p_mean_variance
-            func =  partial(unwrap_p_mean, model=model, model_kwargs=model_kwargs)
+            # unwrap_p_mean = super(SpacedDiffusion, self).p_mean_variance
+            func =  partial(self.p_mean_variance, model=model, model_kwargs=model_kwargs)
+            model_kwargs['out_func'] = func
+            fs = cond_fn(x, self._scale_timesteps(t), **model_kwargs)
+            # Line 5 in freedom paper? FIXME: haowei
+            out["pred_xstart"] += fs * _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+        
+        elif model_kwargs['guide_mode'] == 'ugd':
+            from guided_diffusion.respace import SpacedDiffusion
+            func =  partial(self.p_mean_variance, model=model, model_kwargs=model_kwargs)
+            # func =  partial(unwrap_p_mean, model=model, model_kwargs=model_kwargs)
             model_kwargs['out_func'] = func
 
-            fs = cond_fn.model(x, self._scale_timesteps(t), **model_kwargs)
-            out["pred_xstart"] += fs * _extract_into_tensor(self.alphas_cumprod, t, x.shape)
-            
+            fs = cond_fn(x, self._scale_timesteps(t), **model_kwargs)
+            eps = eps - fs * (1 - _extract_into_tensor(self.alphas_cumprod, t, x.shape)).sqrt()
+            out["pred_xstart"] = self._predict_xstart_from_eps(x, t, eps)
         
         elif model_kwargs['guide_mode'] in ['guide_x0', 'manifold']:
             ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
@@ -577,6 +586,8 @@ class GaussianDiffusion:
         device=None,
         progress=False,
         eta=1.0,
+        iteration=1,
+        shrink_cond_x0=True,
     ):
         """
         Generate samples from the model.
@@ -597,7 +608,7 @@ class GaussianDiffusion:
         :param progress: if True, show a tqdm progress bar.
         :return: a non-differentiable batch of samples.
         """
-        del eta # Not used for DDPM
+        del eta, iteration, shrink_cond_x0 # Not used for DDPM
         final = None
         for sample in self.p_sample_loop_progressive(
             model,
@@ -765,12 +776,14 @@ class GaussianDiffusion:
         progress=False,
         eta=0.0,
         iteration=1,
+        shrink_cond_x0=True,
     ):
         """
         Generate samples from the model using DDIM.
 
         Same usage as p_sample_loop().
         """
+        del shrink_cond_x0
         final = None
         for sample in self.ddim_sample_loop_progressive(
             model,
@@ -862,6 +875,7 @@ class GaussianDiffusion:
         del eta
 
         xt, shr_x0 = inp['sample'], inp['shrink_xstart']
+        sqrt_acum = _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
         # x0 = shr_x0 / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)   # computes m_t = \sqrt{alpha_t} * M_t, the unshrink mean
         noise = th.randn_like(xt)
         var = _extract_into_tensor(self.posterior_variance, t, xt.shape)
@@ -903,20 +917,38 @@ class GaussianDiffusion:
 
         
         if model_kwargs['guide_mode'] == 'manifold':
-            sqrt_acum = _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
-            in_x = shr_pred if shrink_cond_x0 else shr_pred / sqrt_acum
-            cond_score = cond_fn(
+            
+            in_x = shr_pred / sqrt_acum
+            fs = cond_fn(
                 in_x, self._scale_timesteps(th.zeros_like(t)), **model_kwargs)
-            shr_pred = shr_pred + sqrt_acum * cond_score
-    
+            fs = fs * sqrt_acum if shrink_cond_x0 else fs
+            shr_pred = shr_pred + fs
+        elif model_kwargs['guide_mode'] == 'dynamic':
+            # By default, dynamic correponds to dynamic-two-0.1*a*(1-a)
+            ca_t = sqrt_acum ** 2
+            in_x = shr_pred / sqrt_acum # This correspond to the x0
+            fs = cond_fn(in_x, self._scale_timesteps(th.zeros_like(t)), 
+                         **model_kwargs) #* (1-ca_t)
+            ps = -(1-ca_t)**0.5 * func(x=in_x, t=th.zeros_like(t))['eps']
+            # ps = th.zeros_like(in_x)
+            gs = (ca_t) ** 0.5 * (xt - ca_t**0.5 * in_x)
+            # gs = th.zeros_like(in_x)
+
+            scores = fs + 0.5 * ca_t * (1-ca_t) * (ps + gs)
+            scores = scores * sqrt_acum if shrink_cond_x0 else scores
+            shr_pred += scores
         
-        x0 = shr_pred / _extract_into_tensor(self.sqrt_alphas_cumprod, t, xt.shape)
+        x0 = shr_pred / sqrt_acum # we use post sampling: ddjm1 equals to ddim
         mean_pred, _, _ = self.q_posterior_mean_variance(x0, xt, t)
         sample = mean_pred + coef * noise    
         
         from guided_diffusion import logger
         tn = lambda x: th.mean(x ** 2).item()
         logger.log(f"t:{t[0].item()}. [2-norm] xt-1: {tn(sample):.2e}, shrink: {tn(shr_pred):.2e}, jvp: {tn(dmt):.2e}, diff-jvp: {tn(diff):.2e}")
+        if model_kwargs['guide_mode'] == 'manifold':
+            logger.log(f"      [2-norm] fs: {tn(fs):.2e}")
+        if model_kwargs['guide_mode'] == 'dynamic':
+            logger.log(f"      [2-norm] fs: {tn(fs):.2e}, ps: {tn(ps):.2e}, gs: {tn(gs):.2e}, scores: {tn(scores):.2e}")        
         return {"sample": sample, "shrink_xstart": shr_pred}
 
     def ddjm_sample_loop(
@@ -932,6 +964,7 @@ class GaussianDiffusion:
         progress=False,
         eta=0.0,
         iteration=5,
+        shrink_cond_x0=True,
     ):
         """
         Generate samples from the model using DDIM.
@@ -950,7 +983,8 @@ class GaussianDiffusion:
             device=device,
             progress=progress,
             eta=eta,
-            iteration=iteration
+            iteration=iteration,
+            shrink_cond_x0=shrink_cond_x0,
         ):
             final = sample
         return final["sample"]
@@ -968,6 +1002,7 @@ class GaussianDiffusion:
         progress=False,
         eta=0.0,
         iteration=5,
+        shrink_cond_x0=True,
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
@@ -1006,7 +1041,8 @@ class GaussianDiffusion:
                     cond_fn=cond_fn,
                     model_kwargs=model_kwargs,
                     eta=eta,
-                    iteration=iteration
+                    iteration=iteration,
+                    shrink_cond_x0=shrink_cond_x0,
                 )
                 yield out
 

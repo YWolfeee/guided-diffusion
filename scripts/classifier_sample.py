@@ -111,7 +111,8 @@ def main():
             device=dist_util.dev(),
             progress=args.progress,
             eta=args.eta,
-            iteration=args.iteration
+            iteration=args.iteration,
+            shrink_cond_x0=args.shrink_cond_x0,
         )
         sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
         sample = sample.permute(0, 2, 3, 1)
@@ -138,9 +139,10 @@ def main():
     if dist.get_rank() == 0:
         shape_str = "x".join([str(x) for x in arr.shape])
         out_path = os.path.join(logger.get_dir(), f"samples_{shape_str}.npz")
-        logger.log(f"saving to {out_path}")
         np.savez(out_path, arr, label_arr)
-        save_images(arr, out_path.replace('.npz', '.png'))
+        img_path = out_path.replace('.npz', '.png')
+        save_images(arr, img_path)
+        logger.log(f"saving to {img_path}")
 
     dist.barrier()
     logger.log("sampling complete")
@@ -208,6 +210,7 @@ def create_argparser():
         face_image1_id='16239',
         face_image2_id='27812',
         face_image3_id='15148',
+        shrink_cond_x0=True,    # whether to shrink the score of x0 by at
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(classifier_defaults())

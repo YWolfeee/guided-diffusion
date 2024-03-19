@@ -116,7 +116,7 @@ class FIDStatistics:
 
         # product might be almost singular
         covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
-        if not np.isfinite(covmean).all():
+        if not np.isfinite(covmean).all() or np.iscomplexobj(covmean):
             msg = (
                 "fid calculation produces singular product; adding %s to diagonal of cov estimates"
                 % eps

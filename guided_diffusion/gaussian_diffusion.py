@@ -426,6 +426,7 @@ class GaussianDiffusion:
             xstart = p_mean_var["pred_xstart"]
             init_mean = th.mean(xstart ** 2).item()
             ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+            sqrt_acum = ca_t ** 0.5
             # compute (1-ca_t) * scores of p(x0), p(xt|x0), and p(y|x0)
             fs = cond_fn(
                 xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
@@ -435,54 +436,35 @@ class GaussianDiffusion:
 
             # sum over scores based on strategy
             scores = 0
-            if model_kwargs['guide_mode'] == 'dynamic-full-0.5*a*(1-a)':
-                scores = 0.5 * ca_t * (1-ca_t) * (fs + ps + gs)
-            elif model_kwargs['guide_mode'] == 'dynamic-full-0.1*a*(1-a)':
-                scores = 0.1 * ca_t * (1-ca_t) * (fs + ps + gs)
-            elif model_kwargs['guide_mode'] == 'dynamic-two-0.5*a*(1-a)':
-                scores = fs + 0.5 * ca_t * (1-ca_t) * (ps + gs)
-            elif model_kwargs['guide_mode'] == 'dynamic-two-0.1*a*(1-a)':
+            if model_kwargs['guide_mode'] == 'dynamic-two-0.1':
+                scores = fs + 0.1 * (ps + gs)
+            elif model_kwargs['guide_mode'] == 'dynamic-two-0.1-a':
                 scores = fs + 0.1 * ca_t * (1-ca_t) * (ps + gs)
-            elif model_kwargs['guide_mode'] == 'dynamic-two-0.5*a-0.5*(1-a)':
-                scores = fs + 0.5 * ca_t * ps + 0.5 * (1-ca_t) * gs
-            elif model_kwargs['guide_mode'] == 'dynamic-two-0.1*a-0.1*(1-a)':
-                scores = fs + 0.1 * ca_t * ps + 0.1 * (1-ca_t) * gs
-            elif model_kwargs['guide_mode'] == 'dynamic-one-0.5*(1-a)':
-                scores = fs + ps + 0.5 * (1-ca_t) * gs
-            elif model_kwargs['guide_mode'] == 'dynamic-one-0.1*(1-a)':
-                scores = fs + ps + 0.1 * (1-ca_t) * gs
-            elif model_kwargs['guide_mode'] == 'dynamic-nog-0.5*a':
-                scores = fs + 0.5 * ca_t * ps
-            elif model_kwargs['guide_mode'] == 'dynamic-nog-0.1*a':
-                scores = fs + 0.1 * ca_t * ps
-            elif model_kwargs['guide_mode'] == 'dynamic-nog-0.5':
-                scores = fs + 0.5 * ps
-            elif model_kwargs['guide_mode'] == 'dynamic-nog-0.1':
-                scores = fs + 0.1 * ps
-            elif model_kwargs['guide_mode'] == 'dynamic-fonly':
-                # This should match guide_x0
-                scores = fs
+            else:
+                raise NotImplementedError(model_kwargs['guide_mode'])
+            # elif model_kwargs['guide_mode'] == 'dynamic-nog-0.5*a':
+            #     scores = fs + 0.5 * ca_t * ps
+            # elif model_kwargs['guide_mode'] == 'dynamic-nog-0.1*a':
+            #     scores = fs + 0.1 * ca_t * ps
+            # elif model_kwargs['guide_mode'] == 'dynamic-nog-0.5':
+            #     scores = fs + 0.5 * ps
+            # elif model_kwargs['guide_mode'] == 'dynamic-nog-0.1':
+            #     scores = fs + 0.1 * ps
+            # elif model_kwargs['guide_mode'] == 'dynamic-fonly':
+            #     # This should match guide_x0
+            #     scores = fs
+
+            scores = scores * sqrt_acum if model_kwargs['shrink_cond_x0'] else scores
 
             xstart += scores
-            real  = (self.betas * (1-self.alphas_cumprod_prev)/(1 - self.alphas_cumprod))**0.5
-            x0_p = self.betas * (self.alphas_cumprod_prev) ** 0.5 / (1-self.alphas_cumprod)
-            x0_i = self.alphas_cumprod_prev ** 0.5 - self.sqrt_alphas_cumprod * (1 - self.alphas_cumprod_prev) ** 0.5 / self.sqrt_one_minus_alphas_cumprod
-            xt_p = self.sqrt_alphas_cumprod * (1-self.alphas_cumprod_prev)/(1-self.alphas_cumprod)
-            xt_i = ((1-self.alphas_cumprod_prev)/(1-self.alphas_cumprod))**0.5
-            # add_noise = False
-            # if add_noise and t[0].item() > 0:
-            #     noise = th.randn_like(x)
-            #     coef = _extract_into_tensor(real / x0_i, t, x.shape)
-            #     xstart += coef * noise
-            # rate = th.clip(_extract_into_tensor(xt_p/xt_i, t, x.shape), min=None, max=1) if t[0].item() > 0 else 1
-            # xstart += rate * _extract_into_tensor(x0_p/x0_i, t, x.shape) * scores
-                            
+
             p_mean = th.mean(ps ** 2).item()
             f_mean = th.mean(fs ** 2).item()
             gau_mean = th.mean(gs ** 2).item()
             final_mean = th.mean(xstart ** 2).item()
             out["pred_xstart"] = xstart
-            out["eps"] = self._predict_eps_from_xstart(x, t, xstart)
+            # We return to the setting where epsilon is NOT changed.
+            # out["eps"] = self._predict_eps_from_xstart(x, t, xstart)
             from guided_diffusion import logger
             logger.log(f"t:{t[0].item()}, init_mean: {init_mean:.2e}, final_mean: {final_mean:.2e}, f_mean: {f_mean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}")
             
@@ -673,6 +655,7 @@ class GaussianDiffusion:
         model_kwargs=None,
         eta=0.0,
         iteration=1,
+        shrink_cond_x0=True,
     ):
         """
         Sample x_{t-1} from the model using DDIM.
@@ -680,6 +663,7 @@ class GaussianDiffusion:
         Same usage as p_sample().
         """
         # out_func = partial(self.p_mean_variance, model=model, clip_denoised=clip_denoised, denoised_fn=denoised_fn, model_kwargs=model_kwargs)
+        model_kwargs['shrink_cond_x0'] = shrink_cond_x0
         out = self.p_mean_variance(
             model,
             x,
@@ -703,10 +687,11 @@ class GaussianDiffusion:
         )
         # Equation 12.
         noise = th.randn_like(x)
-        mean_pred = (
-            out["pred_xstart"] * th.sqrt(alpha_bar_prev)
-            + th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps
-        )
+        # mean_pred = (
+        #     out["pred_xstart"] * th.sqrt(alpha_bar_prev)
+        #     + th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps
+        # )
+        mean_pred = out['mean']
         nonzero_mask = (
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         )  # no noise when t == 0
@@ -771,7 +756,6 @@ class GaussianDiffusion:
 
         Same usage as p_sample_loop().
         """
-        del shrink_cond_x0
         final = None
         for sample in self.ddim_sample_loop_progressive(
             model,
@@ -784,7 +768,8 @@ class GaussianDiffusion:
             device=device,
             progress=progress,
             eta=eta,
-            iteration=iteration
+            iteration=iteration,
+            shrink_cond_x0=shrink_cond_x0,
         ):
             final = sample
         return final["sample"]
@@ -802,6 +787,7 @@ class GaussianDiffusion:
         progress=False,
         eta=0.0,
         iteration=1,
+        shrink_cond_x0=True,
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
@@ -836,7 +822,8 @@ class GaussianDiffusion:
                     cond_fn=cond_fn,
                     model_kwargs=model_kwargs,
                     eta=eta,
-                    iteration=iteration
+                    iteration=iteration,
+                    shrink_cond_x0=shrink_cond_x0,
                 )
                 yield out
                 img = out["sample"]
@@ -872,15 +859,24 @@ class GaussianDiffusion:
         )  # no noise when t == 0
         sigma = _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, xt.shape)
 
-        # noise = 0.5 * (noise + th.randn_like(xt))   # import randomness
         func = partial(self.p_mean_variance, model=model, clip_denoised=clip_denoised, denoised_fn=denoised_fn, model_kwargs=model_kwargs)
         eps = func(x=xt, t=t)['eps']
+
+
+        # Use first order dynamics
+        beta_t = _extract_into_tensor(self.betas, t, xt.shape)
+        sqbeta = _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, xt.shape)
+        shr_pred = (shr_x0 - sqbeta * beta_t * eps / 2) / th.sqrt(1 - beta_t) 
+        delta_eps = - eps + sqbeta / th.sqrt(1-_extract_into_tensor(self.alphas_cumprod_next, t, xt.shape)) * inp['eps']
+        # delta_eps = - eps + inp['eps']
+        shr_pred += coef * noise + sqbeta * delta_eps
+
         # estimate sigma * nabla^2 log p(x_t) @ noise via finite difference
-        jvp = 1000 * (func(x=xt+sigma * noise / 1000, t=t)['eps'] - eps)
+        # jvp = 1000 * (func(x=xt+sigma * noise / 1000, t=t)['eps'] - eps)
         # also compute the ddim x_{0|t} that is used to align
         real = xt - sigma * eps
         # update shrink_mean
-        shr_pred = shr_x0 / th.sqrt(1-_extract_into_tensor(self.betas, t, xt.shape)) + coef * (noise - jvp)
+        # shr_pred = shr_x0 / th.sqrt(1-_extract_into_tensor(self.betas, t, xt.shape)) + coef * (noise - jvp)
 
         # with th.enable_grad():
         #     x = xt.detach().requires_grad_(True)
@@ -900,31 +896,37 @@ class GaussianDiffusion:
 
         dmt = shr_pred - shr_x0
         diff = shr_pred - real
-        if t[0].item() % iteration == 0:
-            shr_pred = real # align with x_{0|t} after `iteration` steps
+        if t[0].item() == self.num_timesteps - 1 or t[0].item() % iteration == 0:
+            shr_pred = real
+        # if t[0].item() % iteration == 0:
+            # shr_pred = real # align with x_{0|t} after `iteration` steps
 
         
+        ca_t = sqrt_acum ** 2
         if model_kwargs['guide_mode'] == 'manifold':
             
             in_x = shr_pred / sqrt_acum
-            fs = cond_fn(
-                in_x, self._scale_timesteps(th.zeros_like(t)), **model_kwargs)
-            fs = fs * sqrt_acum if shrink_cond_x0 else fs
+            fs = cond_fn(in_x, self._scale_timesteps(th.zeros_like(t)), 
+                         **model_kwargs) * (1 - ca_t)
+            fs = fs * sqrt_acum ** 2 if shrink_cond_x0 else fs
             shr_pred = shr_pred + fs
-        elif model_kwargs['guide_mode'] == 'dynamic':
+        elif model_kwargs['guide_mode'] == 'dynamic-two-0.1':
             # By default, dynamic correponds to dynamic-two-0.1*a*(1-a)
-            ca_t = sqrt_acum ** 2
             in_x = shr_pred / sqrt_acum # This correspond to the x0
             fs = cond_fn(in_x, self._scale_timesteps(th.zeros_like(t)), 
-                         **model_kwargs) #* (1-ca_t)
+                         **model_kwargs) * (1-ca_t)
             ps = -(1-ca_t)**0.5 * func(x=in_x, t=th.zeros_like(t))['eps']
             # ps = th.zeros_like(in_x)
             gs = (ca_t) ** 0.5 * (xt - ca_t**0.5 * in_x)
             # gs = th.zeros_like(in_x)
 
-            scores = fs + 0.5 * ca_t * (1-ca_t) * (ps + gs)
-            scores = scores * sqrt_acum if shrink_cond_x0 else scores
+            # scores = fs + 0.1 * ca_t * (1-ca_t) * (ps + gs)
+            scores = fs + 0.1 * (ps + gs) # slightly better than 0.0
+            # scores = fs + ca_t * (1-ca_t) * (gs + ps) 
+            scores = scores * sqrt_acum ** 2 if shrink_cond_x0 else scores
             shr_pred += scores
+        else:
+            raise NotImplementedError(model_kwargs['guide_mode'])
         
         x0 = shr_pred / sqrt_acum # we use post sampling: ddjm1 equals to ddim
         mean_pred, _, _ = self.q_posterior_mean_variance(x0, xt, t)
@@ -937,7 +939,7 @@ class GaussianDiffusion:
             logger.log(f"      [2-norm] fs: {tn(fs):.2e}")
         if model_kwargs['guide_mode'] == 'dynamic':
             logger.log(f"      [2-norm] fs: {tn(fs):.2e}, ps: {tn(ps):.2e}, gs: {tn(gs):.2e}, scores: {tn(scores):.2e}")        
-        return {"sample": sample, "shrink_xstart": shr_pred}
+        return {"sample": sample, "shrink_xstart": shr_pred, 'eps': eps}
 
     def ddjm_sample_loop(
         self,
@@ -1016,6 +1018,7 @@ class GaussianDiffusion:
         out = {
             "sample": img,
             "shrink_xstart": th.zeros_like(img),
+            "eps": th.zeros_like(img),
         }
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)

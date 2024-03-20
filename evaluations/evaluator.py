@@ -77,6 +77,7 @@ def main(args: argparse.Namespace):
     }
     
     logger.log(res)
+    logger.log(f"Writting to {args.output_path}")
     if args.output_path is not None:
         with open(args.output_path, 'w') as f:
             json.dump(res, f)

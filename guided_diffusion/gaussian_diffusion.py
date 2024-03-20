@@ -433,16 +433,23 @@ class GaussianDiffusion:
             # compute (1-ca_t) * scores of p(x0), p(xt|x0), and p(y|x0)
             fs = cond_fn(
                 xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
-            ) * (1-ca_t)
+            ) #* (1-ca_t)
             ps = -(1-ca_t)**0.5 * self.p_mean_variance(model=model, x=xstart, t=th.zeros_like(t))['eps']
             gs = (ca_t) ** 0.5 * (x - ca_t**0.5 * xstart)
 
             # sum over scores based on strategy
             scores = 0
             if model_kwargs['guide_mode'] == 'dynamic-two-0.1':
+                fs = fs * (1-ca_t)
                 scores = fs + 0.1 * (ps + gs)
             elif model_kwargs['guide_mode'] == 'dynamic-two-0.1-a':
+                fs = fs * (1-ca_t)
                 scores = fs + 0.1 * ca_t * (1-ca_t) * (ps + gs)
+            elif model_kwargs['guide_mode'] == 'dynamic-two-0.1-did':
+                scores = fs + 0.1 * (ps + gs)
+            elif model_kwargs['guide_mode'] == 'dynamic-two-0.1-a-did':
+                scores = fs + 0.1 * ca_t * (ps + gs)
+
             else:
                 raise NotImplementedError(model_kwargs['guide_mode'])
             # elif model_kwargs['guide_mode'] == 'dynamic-nog-0.5*a':

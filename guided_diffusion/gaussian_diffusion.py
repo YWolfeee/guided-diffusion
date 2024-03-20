@@ -412,10 +412,13 @@ class GaussianDiffusion:
             
         
         elif model_kwargs['guide_mode'] in ['guide_x0', 'manifold']:
+            ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+            sqrt_acum = ca_t ** 0.5
             pred_xs = p_mean_var['pred_xstart']
             cond_score = cond_fn(
                 pred_xs, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
             )
+            cond_score = cond_score * sqrt_acum if model_kwargs['shrink_cond_x0'] else cond_score
             pred_xs = pred_xs + cond_score
             out["pred_xstart"] = pred_xs
             # manifold does not update eps using new x0. guide_x0 does.

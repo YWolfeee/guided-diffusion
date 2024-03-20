@@ -74,7 +74,7 @@ def main():
                     "classifier_scale": args.classifier_scale,
                     "positive_label": args.positive_label}
         cond_fn = get_target_cond_fn(classifier, tar_feat, args)
-    else:
+    elif args.classifier_path.endswith(".pt") or args.classifier_path.endswith(".pth"):
         classifier = create_classifier(**args_to_dict(args, classifier_defaults().keys()))
         # from PyTorch_CIFAR10.cifar10_models import resnet
         # classifier = resnet.resnet50()
@@ -86,6 +86,8 @@ def main():
             classifier.convert_to_fp16()
         classifier.eval()
         cond_fn, model_kwargs = get_cond_fn(classifier, args)
+    else:
+        raise ValueError(f"Unknown classifier path: {args.classifier_path}")
 
     def model_fn(x, t, y=None,**kwargs):
         # assert y is not None

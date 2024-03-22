@@ -402,13 +402,14 @@ class GaussianDiffusion:
             out["pred_xstart"] = self._predict_xstart_from_eps(x, t, eps)
         
         elif model_kwargs["guide_mode"] == 'freedom':
-            from guided_diffusion.respace import SpacedDiffusion
-            unwrap_p_mean = super(SpacedDiffusion, self).p_mean_variance
-            func =  partial(unwrap_p_mean, model=model, model_kwargs=model_kwargs)
-            model_kwargs['out_func'] = func
+            with th.enable_grad():
+                x_in = x.detach().requires_grad_(True)
+                eps = self.p_mean_variance(model=model, x=x_in, t=t, model_kwargs=model_kwargs)['eps']
+                x0 = self._predict_xstart_from_eps(x_in, t, eps)
+                scaled_log_probs = cond_fn(x0, self._scale_timesteps(th.zeros_like(t)), **model_kwargs)
+                fs = th.autograd.grad(scaled_log_probs.sum(), x_in)[0]
 
-            fs = cond_fn.model(x, self._scale_timesteps(t), **model_kwargs)
-            out["pred_xstart"] += fs * _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+            out["pred_xstart"] += fs * _extract_into_tensor(self.sqrt_alphas_cumprod, t, x.shape)
             
         
         elif model_kwargs['guide_mode'] in ['guide_x0', 'manifold']:
@@ -679,10 +680,12 @@ class GaussianDiffusion:
             denoised_fn=denoised_fn,
             model_kwargs=model_kwargs,
         )
+        out['xt'] = x.clone()
 
         if cond_fn is not None:
             for _ in range(iteration):
                 out = self.condition_score(cond_fn, out, x, t, model=model, model_kwargs=model_kwargs)
+        x = out['xt']
         eps = out['eps']
 
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
@@ -873,7 +876,7 @@ class GaussianDiffusion:
         # Use first order dynamics
         beta_t = _extract_into_tensor(self.betas, t, xt.shape)
         sqbeta = _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, xt.shape)
-        shr_pred = (shr_x0 - sqbeta * beta_t * eps / 2) / th.sqrt(1 - beta_t) 
+        shr_pred = (shr_x0) / th.sqrt(1 - beta_t) - sqbeta * beta_t * eps / 2
         delta_eps = - eps + sqbeta / th.sqrt(1-_extract_into_tensor(self.alphas_cumprod_next, t, xt.shape)) * inp['eps']
         # delta_eps = - eps + inp['eps']
         shr_pred += coef * noise + sqbeta * delta_eps
@@ -910,7 +913,9 @@ class GaussianDiffusion:
 
         
         ca_t = sqrt_acum ** 2
-        if model_kwargs['guide_mode'] == 'manifold':
+        if model_kwargs['guide_mode'] is None:
+            pass
+        elif model_kwargs['guide_mode'] == 'manifold':
             
             in_x = shr_pred / sqrt_acum
             fs = cond_fn(in_x, self._scale_timesteps(th.zeros_like(t)), 

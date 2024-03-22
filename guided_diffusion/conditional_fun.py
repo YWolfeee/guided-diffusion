@@ -4,6 +4,7 @@ from typing import Tuple, Union
 import torch
 from torch import nn
 import torch.nn.functional as F
+from guided_diffusion import logger
 
 from guided_diffusion import dist_util
 from .unet import EncoderUNetModel
@@ -41,19 +42,60 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
     # if args.guide_mode in ["classifier", "guide_x0", "manifold", 'unbiased', "resample"]:
     # else:
     # raise ValueError(f"Unknown guide mode: {args.guide_mode}")
-
 def get_target_cond_fn(classifier, tar_feat, args: Namespace):
     from guided_diffusion.celebA.faceid import arcface_forward
+    from PIL import Image
+    import numpy as np
+
+    with torch.no_grad():
+        image1 = Image.open(f'/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/{args.face_image1_id}.jpg').convert('RGB')
+        data1 = torch.tensor(np.array(image1).transpose(2, 0, 1), device='cuda').unsqueeze(0) / 127.5 - 1
+
+        image2 = Image.open(f'/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/{args.face_image2_id}.jpg').convert('RGB')
+        data2 = torch.tensor(np.array(image2).transpose(2, 0, 1), device='cuda').unsqueeze(0) / 127.5 - 1
+
+        image3 = Image.open(f'/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/{args.face_image3_id}.jpg').convert('RGB')
+        data3 = torch.tensor(np.array(image3).transpose(2, 0, 1), device='cuda').unsqueeze(0) / 127.5 - 1
+            
+        output1 = arcface_forward(classifier, data1)
+        output2 = arcface_forward(classifier, data2)
+        output3 = arcface_forward(classifier, data3)
+        target_feat1 = output1
+        target_feat2 = output2
+        target_feat3 = output3
+
     def cond_fn (x, t, y=None, **kwargs):
+
         with torch.enable_grad():
-            x_in = x.detach().requires_grad_(True)
-            feat = arcface_forward(classifier, x_in)
+            if args.guide_mode == 'freedom' or args.guide_mode == 'ugd':
+                model_func = kwargs['out_func']
+                x_in = x.detach().requires_grad_(True)
+                x0 = model_func(x=x_in, t=t.long())['pred_xstart']
+                feat = arcface_forward(classifier, x0)
+            else:
+                x_in = x.detach().requires_grad_(True)
+                feat = arcface_forward(classifier, x_in)
+                x0 = x_in
+            
             if args.faceid_loss_type == 'cosine':
                 dist = torch.cosine_similarity(feat, tar_feat, dim=-1)
             elif args.faceid_loss_type == 'l2':
-                dist = - torch.linalg.norm(feat - tar_feat, dim=-1)
+
+                dist1 = - torch.linalg.norm(feat - target_feat1, dim=-1) \
+                    + (- torch.linalg.norm(feat - target_feat2, dim=-1)) \
+                    + (- torch.linalg.norm(feat - target_feat3, dim=-1))
+                # dist1 = - torch.linalg.norm(feat - target_feat1, dim=-1)
+
+                # dist2 = - torch.linalg.norm(data1 - x_in, dim=-1).mean(dim=-1).mean(dim=-1)
+                dist2 = (- torch.linalg.norm(data1 - x0, dim=-1) + \
+                        (- torch.linalg.norm(data2 - x0, dim=-1)) + \
+                        (- torch.linalg.norm(data3 - x0, dim=-1)) ).mean(dim=-1).mean(dim=-1)
+
+                logger.info('{} {}'.format(dist1.mean().item(), dist2.mean().item()))
+
+                dist = dist1 + dist2
             else:
                 raise NotImplementedError
-            print(dist.mean().item())
+            logger.info("{}".format(dist.mean().item()))
             return torch.autograd.grad(dist.sum(), x_in)[0] * args.classifier_scale
     return cond_fn

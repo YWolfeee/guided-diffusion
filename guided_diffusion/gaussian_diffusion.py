@@ -409,7 +409,9 @@ class GaussianDiffusion:
                 scaled_log_probs = cond_fn(x0, self._scale_timesteps(th.zeros_like(t)), **model_kwargs)
                 fs = th.autograd.grad(scaled_log_probs.sum(), x_in)[0]
 
-            out["pred_xstart"] += fs * _extract_into_tensor(self.sqrt_alphas_cumprod, t, x.shape)
+            sqrt_acum = _extract_into_tensor(self.sqrt_alphas_cumprod, t, x.shape)
+            fs = fs * sqrt_acum if model_kwargs['shrink_cond_x0'] else fs
+            out["xt"] += fs
             
         
         elif model_kwargs['guide_mode'] in ['guide_x0', 'manifold']:
@@ -505,7 +507,7 @@ class GaussianDiffusion:
         #     print(f"t:{t[0].item()}, init_mean: {init_mean}, final_mean: {final_mean}, diff: {diff}, f_mean: {f_mean}, g_mean: {g_mean}")
 
         out["mean"], _, _ = self.q_posterior_mean_variance(
-            x_start=out["pred_xstart"], x_t=x, t=t
+            x_start=out["pred_xstart"], x_t=out['xt'], t=t
         )
         return out
 

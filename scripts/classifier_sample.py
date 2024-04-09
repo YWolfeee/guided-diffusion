@@ -94,7 +94,7 @@ def main():
         return model(x, t, y if args.class_cond else None)
         # return model(x, t, y if args.guide_mode is not None else None)
 
-    assert args.use_ddim ^ args.use_ddjm
+    assert 1-(args.use_ddim & args.use_ddjm)
     sample_fn = (diffusion.ddim_sample_loop if args.use_ddim else (
                  diffusion.ddjm_sample_loop if args.use_ddjm else 
                  diffusion.p_sample_loop))

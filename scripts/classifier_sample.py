@@ -11,7 +11,7 @@ import numpy as np
 import torch as th
 import torch.distributed as dist
 import torch.nn.functional as F
-
+import imageio
 np.random.seed(0)
 th.manual_seed(0)
 
@@ -27,6 +27,9 @@ from guided_diffusion.script_util import (
     args_to_dict,
 )
 
+from PIL import Image
+import math
+from matplotlib import pyplot as plt
 
 def main():
     args = create_argparser().parse_args()
@@ -104,7 +107,7 @@ def main():
     while len(all_images) * args.batch_size < args.num_samples:
         start = time.time()
         
-        sample = sample_fn(
+        sample, traj = sample_fn(
             model_fn,
             (args.batch_size, 3, args.image_size, args.image_size),
             clip_denoised=args.clip_denoised,
@@ -115,10 +118,32 @@ def main():
             eta=args.eta,
             iteration=args.iteration,
             shrink_cond_x0=args.shrink_cond_x0,
+            score_norm=args.score_norm
         )
         sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
         sample = sample.permute(0, 2, 3, 1)
         sample = sample.contiguous()
+
+        '''
+            save the trajectory of samples and the predicted x0
+        '''
+
+        if args.plot_traj:
+            traj = {
+                'samples': [((x['sample'] + 1) * 127.5).clamp(0, 255).to(th.uint8).permute(0,2,3,1).contiguous() for x in traj],
+                'pred_x0': [((x['pred_xstart'] + 1) * 127.5).clamp(0, 255).to(th.uint8).permute(0,2,3,1).contiguous()  for x in traj]
+            }
+            samples_pil = [[Image.fromarray(y.cpu().numpy()) for y in time] for time in traj['samples']]
+            x0_pil = [[Image.fromarray(y.cpu().numpy()) for y in time] for time in traj['pred_x0']]
+            
+            for i in range(len(samples_pil)):
+                save_images(samples_pil[i], os.path.join(logger.get_dir(), f"sample_{i}.png"))
+                save_images(x0_pil[i], os.path.join(logger.get_dir(), f"x0_{i}.png"))
+            
+            gif_samples = [Image.open(os.path.join(logger.get_dir(), f"sample_{i}.png")) for i in range(len(samples_pil))]
+            gif_x0 = [Image.open(os.path.join(logger.get_dir(), f"x0_{i}.png")) for i in range(len(x0_pil))]
+            imageio.mimsave(os.path.join(logger.get_dir(), f"sample_traj.gif"), gif_samples, duration=5)
+            imageio.mimsave(os.path.join(logger.get_dir(), f"x0_traj.gif"), gif_x0, duration=5)
 
         gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
         dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
@@ -171,11 +196,8 @@ def save_images(images: np.ndarray,
                 labels=None,
                 dpi: int=300,
                 ):
-    from PIL import Image
-    import math
-    from matplotlib import pyplot as plt
     
-    images = [Image.fromarray(image) for image in images]
+    # images = [Image.fromarray(image) for image in images]
     images = images[:min(64, len(images))]
     length = math.ceil(math.sqrt(len(images)))
     fig, axs = plt.subplots(length, length, figsize=(16, 16))
@@ -209,7 +231,12 @@ def create_argparser():
         model_id=None,
         iteration=10,
         shrink_cond_x0=True,    # whether to shrink the score of x0 by at
-        faceid_loss_type='cosine'
+        faceid_loss_type='cosine',
+        face_image1_id='00000',
+        face_image2_id='00000',
+        face_image3_id='00000',
+        plot_args=False,
+        score_norm=1e09,
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(classifier_defaults())

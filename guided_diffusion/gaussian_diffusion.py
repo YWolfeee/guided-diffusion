@@ -412,6 +412,7 @@ class GaussianDiffusion:
             sqrt_acum = _extract_into_tensor(self.sqrt_alphas_cumprod, t, x.shape)
             fs = fs * sqrt_acum if model_kwargs['shrink_cond_x0'] else fs
             out["xt"] += fs
+            # out['pred_xstart'] = self._predict_xstart_from_eps(out['xt'], t, eps)
             
         
         elif model_kwargs['guide_mode'] in ['guide_x0', 'manifold']:
@@ -452,6 +453,8 @@ class GaussianDiffusion:
                 scores = fs + 0.1 * (ps + gs)
             elif model_kwargs['guide_mode'] == 'dynamic-two-0.1-a-did':
                 scores = fs + 0.1 * ca_t * (ps + gs)
+            elif model_kwargs['guide_mode'] == 'dynamic-manifold':
+                scores = fs
 
             else:
                 raise NotImplementedError(model_kwargs['guide_mode'])
@@ -469,8 +472,15 @@ class GaussianDiffusion:
 
             scores = scores * sqrt_acum if model_kwargs['shrink_cond_x0'] else scores
 
-            xstart += scores
+            score_norm = th.norm(scores.view(scores.shape[0], -1), dim=1)
+            scores = scores * th.where(score_norm > model_kwargs['score_norm'], model_kwargs['score_norm'] / score_norm, 1).view(-1, *([1] * (len(scores.shape) - 1)))
+            print(scores.view(scores.shape[0], -1).norm(dim=1))
+            # scores.clip_(-1, 1)
 
+            xstart += scores
+            # xstart.clip_(-1, 1)
+            # print(xstart.view(xstart.shape[0], -1).norm(dim=1))
+            
             p_mean = th.mean(ps ** 2).item()
             f_mean = th.mean(fs ** 2).item()
             gau_mean = th.mean(gs ** 2).item()
@@ -669,6 +679,7 @@ class GaussianDiffusion:
         eta=0.0,
         iteration=1,
         shrink_cond_x0=True,
+        score_norm=1e08,
     ):
         """
         Sample x_{t-1} from the model using DDIM.
@@ -677,6 +688,8 @@ class GaussianDiffusion:
         """
         # out_func = partial(self.p_mean_variance, model=model, clip_denoised=clip_denoised, denoised_fn=denoised_fn, model_kwargs=model_kwargs)
         model_kwargs['shrink_cond_x0'] = shrink_cond_x0
+        model_kwargs['score_norm'] = score_norm
+
         out = self.p_mean_variance(
             model,
             x,
@@ -690,7 +703,7 @@ class GaussianDiffusion:
         if cond_fn is not None:
             for _ in range(iteration):
                 out = self.condition_score(cond_fn, out, x, t, model=model, model_kwargs=model_kwargs)
-        x = out['xt']
+                x = out['xt']
         eps = out['eps']
 
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
@@ -765,6 +778,7 @@ class GaussianDiffusion:
         eta=0.0,
         iteration=1,
         shrink_cond_x0=True,
+        score_norm=1e09,
     ):
         """
         Generate samples from the model using DDIM.
@@ -772,6 +786,7 @@ class GaussianDiffusion:
         Same usage as p_sample_loop().
         """
         final = None
+        traj = []
         for sample in self.ddim_sample_loop_progressive(
             model,
             shape,
@@ -785,9 +800,11 @@ class GaussianDiffusion:
             eta=eta,
             iteration=iteration,
             shrink_cond_x0=shrink_cond_x0,
+            score_norm=score_norm,
         ):
+            traj.append(sample)
             final = sample
-        return final["sample"]
+        return final["sample"], traj
 
     def ddim_sample_loop_progressive(
         self,
@@ -803,6 +820,7 @@ class GaussianDiffusion:
         eta=0.0,
         iteration=1,
         shrink_cond_x0=True,
+        score_norm=1e09,
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
@@ -839,6 +857,7 @@ class GaussianDiffusion:
                     eta=eta,
                     iteration=iteration,
                     shrink_cond_x0=shrink_cond_x0,
+                    score_norm=score_norm
                 )
                 yield out
                 img = out["sample"]

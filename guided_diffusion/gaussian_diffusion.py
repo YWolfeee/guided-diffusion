@@ -396,9 +396,14 @@ class GaussianDiffusion:
 
         eps = self._predict_eps_from_xstart(x, t, p_mean_var["pred_xstart"])
         if model_kwargs['guide_mode'] == 'classifier':
-            eps = eps - (1 - alpha_bar).sqrt() * cond_fn(
+            fscore = (1 - alpha_bar).sqrt() * cond_fn(
                 x, self._scale_timesteps(t), **model_kwargs
             )
+            eps = eps - fscore
+            # Think about the relation between \hat x0 and eps
+            fmean = th.mean(fscore ** 2 * (1-alpha_bar) / alpha_bar).item()
+            from guided_diffusion import logger
+            logger.log(f"t:{t[0].item()}, fmean: {fmean:.2e}")
             out["pred_xstart"] = self._predict_xstart_from_eps(x, t, eps)
         
         elif model_kwargs["guide_mode"] == 'freedom':

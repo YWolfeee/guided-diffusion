@@ -395,17 +395,30 @@ class GaussianDiffusion:
         out = p_mean_var.copy()
 
         eps = self._predict_eps_from_xstart(x, t, p_mean_var["pred_xstart"])
+
         if model_kwargs['guide_mode'] == 'classifier':
             fscore = (1 - alpha_bar).sqrt() * cond_fn(
                 x, self._scale_timesteps(t), **model_kwargs
             )
             eps = eps - fscore
             # Think about the relation between \hat x0 and eps
-            fmean = th.mean(fscore ** 2 * (1-alpha_bar) / alpha_bar).item()
+
+            fmean = th.mean(fscore ** 2  * (1 - alpha_bar) / alpha_bar).item()
+            fnorm = th.norm((fscore * th.sqrt((1-alpha_bar) / alpha_bar)).view(fscore.shape[0], -1), dim=1).mean().item()
+
+            ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+
+            xstart = self._predict_xstart_from_eps(x, t, eps)
+            out["pred_xstart"] = xstart
             from guided_diffusion import logger
-            logger.log(f"t:{t[0].item()}, fmean: {fmean:.2e}")
-            out["pred_xstart"] = self._predict_xstart_from_eps(x, t, eps)
-        
+
+            ps = -(1-ca_t)**0.5 * self.p_mean_variance(model=model, x=xstart, t=th.zeros_like(t))['eps']
+            gs = (ca_t) ** 0.5 * (x - ca_t**0.5 * xstart)
+            p_mean = th.mean(ps ** 2).item()
+            gau_mean = th.mean(gs ** 2).item()
+
+            logger.log(f"t:{t[0].item()}, f_norm: {fnorm:.2e}, f_mean: {fmean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}")
+
         elif model_kwargs["guide_mode"] == 'freedom':
             with th.enable_grad():
                 x_in = x.detach().requires_grad_(True)
@@ -476,9 +489,13 @@ class GaussianDiffusion:
             #     scores = fs
 
             scores = scores * sqrt_acum if model_kwargs['shrink_cond_x0'] else scores
-
+        
             score_norm = th.norm(scores.view(scores.shape[0], -1), dim=1)
-            scores = scores * th.where(score_norm > model_kwargs['score_norm'], model_kwargs['score_norm'] / score_norm, 1).view(-1, *([1] * (len(scores.shape) - 1)))
+            
+            # the ft norms given by classifier (strength=2) {'validity': 0.9062, 'inception_score': 3.595740795135498, 'fid': 91.32703273212505, 'sfid': 323.0204984310473, 'precision': 0.625, 'recall': 0.486} 
+            ft_norms = [23.6, 19.2, 18.4, 17.7, 18.1, 18.1, 17.2, 17.9, 17.1, 17.2, 15.9, 15.3, 14.7, 13.1, 11.9, 10.8, 9.88, 8.94, 7.94, 6.94, 6.05, 5.6, 4.93, 3.99, 3.53, 3.06, 2.71, 2.27, 1.75, 1.41, 1.21, 0.87, 0.663, 0.517, 0.348, 0.235, 0.136, 0.161, 0.0839, 0.0568, 0.0502, 0.0366, 0.0475, 0.0202, 0.0148, 0.0108, 0.012, 0.00697, 0.00166, 2.58e-05][::-1]
+            scores = scores * (ft_norms[t[0]] / score_norm).view(-1, *([1] * (len(scores.shape) - 1)))
+            
             print(scores.view(scores.shape[0], -1).norm(dim=1))
             # scores.clip_(-1, 1)
 
@@ -487,14 +504,15 @@ class GaussianDiffusion:
             # print(xstart.view(xstart.shape[0], -1).norm(dim=1))
             
             p_mean = th.mean(ps ** 2).item()
-            f_mean = th.mean(fs ** 2).item()
+            f_mean = th.mean(scores ** 2).item()
+            f_norm = th.norm(scores.view(scores.shape[0], -1)).mean().item()
             gau_mean = th.mean(gs ** 2).item()
             final_mean = th.mean(xstart ** 2).item()
             out["pred_xstart"] = xstart
             # We return to the setting where epsilon is NOT changed.
             # out["eps"] = self._predict_eps_from_xstart(x, t, xstart)
             from guided_diffusion import logger
-            logger.log(f"t:{t[0].item()}, init_mean: {init_mean:.2e}, final_mean: {final_mean:.2e}, f_mean: {f_mean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}")
+            logger.log(f"t:{t[0].item()}, init_mean: {init_mean:.2e}, final_mean: {final_mean:.2e}, f_norm: {f_norm:.2e}, f_mean: {f_mean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}")
             
         # elif model_kwargs['guide_mode'] == 'resample':
         #     xstart = p_mean_var["pred_xstart"]

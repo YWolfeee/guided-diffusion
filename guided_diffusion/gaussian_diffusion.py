@@ -446,6 +446,51 @@ class GaussianDiffusion:
             # manifold does not update eps using new x0. guide_x0 does.
             if model_kwargs['guide_mode'] == 'guide_x0':
                 out["eps"] = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
+
+        elif 'zero_order' in model_kwargs['guide_mode']:
+            ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+            # import pdb
+            # pdb.set_trace()
+            sqrt_acum = ca_t ** 0.5
+            pred_xs = p_mean_var['pred_xstart']
+            
+            # f(x0)
+            model_kwargs['zero_order'] = True
+            cond_score = cond_fn(
+                pred_xs, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
+            )
+
+            # nabla log p(xt) = - eps(x_t,t)/ sqrt{1-alpha_t}
+            nabla_logp_xt = - eps / (1 - ca_t) ** 0.5
+
+            # nabla log p(xt|x0) =  nabla log N(sqrt{alpha_t} x0, 1-alpha_t) = nabla (- (xt - sqrt{alpha_t} x0)^2 / 2(1-alpha_t)) = (xt - sqrt{alpha_t} x0) / (1-alpha_t)
+            nabla_logp_xt_x0 = (x - ca_t**0.5 * pred_xs) / (1 - ca_t)
+
+            # nabla log p(y|xt)
+            nabla_logp_y_xt = cond_score.view(-1, 1, 1, 1) * (nabla_logp_xt_x0 - nabla_logp_xt)
+            
+            # apply to eps
+            fscore = (1 - alpha_bar).sqrt() * nabla_logp_y_xt
+            eps = eps - fscore
+
+            # obtain the score on x0
+            xstart = self._predict_xstart_from_eps(x, t, eps)
+            out["pred_xstart"] = xstart
+            equi_score = pred_xs - xstart
+            
+            # obtain nabla log p(y|x0)
+            model_kwargs['zero_order'] = False
+            fs = cond_fn(
+                pred_xs, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
+            )
+
+            # element-wise product of two score
+            xstart = xstart + equi_score * fs
+
+            fmean = th.mean(equi_score * fs ** 2  * (1 - alpha_bar) / alpha_bar).item()
+
+            from guided_diffusion import logger
+            logger.log(f"t:{t[0].item()}, f_mean: {fmean:.2e}, nabla_logp_xt_x0: {th.mean(nabla_logp_xt_x0 ** 2).item():.2e}, nabla_logp_xt: {th.mean(nabla_logp_xt ** 2).item():.2e}, equi_score:{th.mean(equi_score ** 2).item():.2e}, fs:{th.mean(fs ** 2).item():.2e}")
         
         elif 'dynamic' in model_kwargs['guide_mode']:
             xstart = p_mean_var["pred_xstart"]

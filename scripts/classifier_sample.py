@@ -237,6 +237,7 @@ def create_argparser():
         face_image3_id='00000',
         plot_args=False,
         score_norm=1e09,
+        plot_traj=False,
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(classifier_defaults())

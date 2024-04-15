@@ -43,7 +43,11 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
             logits = classifier(x_in, t)
             log_probs = F.log_softmax(logits, dim=-1)
             selected = log_probs[range(len(logits)), y.view(-1).long()]
-            return torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale
+
+            if 'zero_order' in kwargs.keys() and kwargs['zero_order']:
+                return F.softmax(logits, dim=-1)[range(len(logits)), y.view(-1).long()] * args.classifier_scale
+            else:
+                return torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale
     return cond_fn, model_kwargs
     # if args.guide_mode in ["classifier", "guide_x0", "manifold", 'unbiased', "resample"]:
     # else:
@@ -54,13 +58,13 @@ def get_target_cond_fn(classifier, tar_feat, args: Namespace):
     import numpy as np
 
     with torch.no_grad():
-        image1 = Image.open(f'/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/{args.face_image1_id}.jpg').convert('RGB')
+        image1 = Image.open(f'/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/{args.face_image1_id}.jpg').convert('RGB').resize([256, 256], resample=2)
         data1 = torch.tensor(np.array(image1).transpose(2, 0, 1), device='cuda').unsqueeze(0) / 127.5 - 1
 
-        image2 = Image.open(f'/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/{args.face_image2_id}.jpg').convert('RGB')
+        image2 = Image.open(f'/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/{args.face_image2_id}.jpg').convert('RGB').resize([256, 256], resample=2)
         data2 = torch.tensor(np.array(image2).transpose(2, 0, 1), device='cuda').unsqueeze(0) / 127.5 - 1
 
-        image3 = Image.open(f'/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/{args.face_image3_id}.jpg').convert('RGB')
+        image3 = Image.open(f'/home/linhw/code/guided-diffusion/datasets/celeba_hq_256/{args.face_image3_id}.jpg').convert('RGB').resize([256, 256], resample=2)
         data3 = torch.tensor(np.array(image3).transpose(2, 0, 1), device='cuda').unsqueeze(0) / 127.5 - 1
             
         output1 = arcface_forward(classifier, data1)
@@ -73,15 +77,11 @@ def get_target_cond_fn(classifier, tar_feat, args: Namespace):
     def cond_fn (x, t, y=None, **kwargs):
 
         with torch.enable_grad():
-            if args.guide_mode == 'freedom' or args.guide_mode == 'ugd':
-                model_func = kwargs['out_func']
-                x_in = x.detach().requires_grad_(True)
-                x0 = model_func(x=x_in, t=t.long())['pred_xstart']
-                feat = arcface_forward(classifier, x0)
-            else:
-                x_in = x.detach().requires_grad_(True)
-                feat = arcface_forward(classifier, x_in)
-                x0 = x_in
+            
+            if args.guide_mode != 'freedom':
+                x = x.detach().requires_grad_(True)
+            
+            feat = arcface_forward(classifier, x)
             
             if args.faceid_loss_type == 'cosine':
                 dist = torch.cosine_similarity(feat, tar_feat, dim=-1)
@@ -93,9 +93,9 @@ def get_target_cond_fn(classifier, tar_feat, args: Namespace):
                 # dist1 = - torch.linalg.norm(feat - target_feat1, dim=-1)
 
                 # dist2 = - torch.linalg.norm(data1 - x_in, dim=-1).mean(dim=-1).mean(dim=-1)
-                dist2 = (- torch.linalg.norm(data1 - x0, dim=-1) + \
-                        (- torch.linalg.norm(data2 - x0, dim=-1)) + \
-                        (- torch.linalg.norm(data3 - x0, dim=-1)) ).mean(dim=-1).mean(dim=-1)
+                dist2 = (- torch.linalg.norm(data1 - x, dim=-1) + \
+                        (- torch.linalg.norm(data2 - x, dim=-1)) + \
+                        (- torch.linalg.norm(data3 - x, dim=-1)) ).mean(dim=-1).mean(dim=-1)
 
                 logger.info('{} {}'.format(dist1.mean().item(), dist2.mean().item()))
 
@@ -103,5 +103,9 @@ def get_target_cond_fn(classifier, tar_feat, args: Namespace):
             else:
                 raise NotImplementedError
             logger.info("{}".format(dist.mean().item()))
-            return torch.autograd.grad(dist.sum(), x_in)[0] * args.classifier_scale
+            
+            if args.guide_mode == 'freedom':
+                return dist.sum() * args.classifier_scale
+            else:
+                return torch.autograd.grad(dist.sum(), x)[0] * args.classifier_scale
     return cond_fn

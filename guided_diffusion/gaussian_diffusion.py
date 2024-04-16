@@ -441,11 +441,26 @@ class GaussianDiffusion:
                 pred_xs, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
             )
             cond_score = cond_score * sqrt_acum if model_kwargs['shrink_cond_x0'] else cond_score
+            # what should be added to x0 if we use time-dependent
+            real_f = (1 - alpha_bar).sqrt() * cond_fn(
+                x, self._scale_timesteps(t), **model_kwargs
+            ) * (1 - ca_t).sqrt() / ca_t.sqrt()
+            norm_rate = th.norm(real_f.view(real_f.shape[0], -1), dim=1) / th.norm(cond_score.view(cond_score.shape[0], -1), dim=1)
+            z_norm = th.norm(cond_score.view(cond_score.shape[0], -1), dim=1)
+            # cond_score *= th.clip(norm_rate, max=1.0)[..., None, None, None]
+            # cond_score *= th.clip(3 / z_norm, max=1.0)[..., None, None, None]
             pred_xs = pred_xs + cond_score
             out["pred_xstart"] = pred_xs
             # manifold does not update eps using new x0. guide_x0 does.
             if model_kwargs['guide_mode'] == 'guide_x0':
                 out["eps"] = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
+            
+            # logging
+            f_mean = th.mean(real_f ** 2).item()
+            z_mean = th.mean(cond_score ** 2).item()
+            from guided_diffusion import logger
+            logger.log(f"t:{t[0].item()}, f_mean: {f_mean:.2e}, z_mean: {z_mean:.2e}")
+
 
         elif 'zero_order' in model_kwargs['guide_mode']:
             ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
@@ -559,30 +574,9 @@ class GaussianDiffusion:
             from guided_diffusion import logger
             logger.log(f"t:{t[0].item()}, init_mean: {init_mean:.2e}, final_mean: {final_mean:.2e}, f_norm: {f_norm:.2e}, f_mean: {f_mean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}")
             
-        # elif model_kwargs['guide_mode'] == 'resample':
-        #     xstart = p_mean_var["pred_xstart"]
-        #     init_mean = th.mean(xstart ** 2).item()
-        #     for i in range(1):
-        #         fs = cond_fn(
-        #             xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
-        #         )
-        #         # xstart = xstart + f_score
-        #         # xt = self.q_sample(xstart, t)
-        #         # xstart_sam = out_func(x=xt, t=t)['pred_xstart']
-        #         p_xt = self.q_mean_variance(xstart, t)[0]
-                
-        #         # graident of x_0 w.r.t. difference of x_t
-        #         gs = self.alphas_cumprod[t[0].item()]*(x - p_xt)  
-        #         # xstart = xstart + g_score + f_score
-        #         # reparam_rate = 0.1
-        #         # xstart = (1-reparam_rate) * xstart + reparam_rate * xstart_sam
-        #     final_mean = th.mean(xstart ** 2).item()
-        #     f_mean = th.mean(fs ** 2).item()
-        #     g_mean = th.mean(gs ** 2).item()
-        #     diff = th.mean((p_mean_var["pred_xstart"] - xstart) ** 2).item()
-        #     out["pred_xstart"] = xstart
-        #     out["eps"] = self._predict_eps_from_xstart(x, t, xstart)
-        #     print(f"t:{t[0].item()}, init_mean: {init_mean}, final_mean: {final_mean}, diff: {diff}, f_mean: {f_mean}, g_mean: {g_mean}")
+        elif model_kwargs['guide_mode'] == 'estimate':
+            pass
+        
 
         out["mean"], _, _ = self.q_posterior_mean_variance(
             x_start=out["pred_xstart"], x_t=out['xt'], t=t

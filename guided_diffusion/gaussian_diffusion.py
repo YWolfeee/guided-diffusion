@@ -991,12 +991,14 @@ class GaussianDiffusion:
         eta=0.0,
         iteration=5,
         shrink_cond_x0=True,
+        score_norm=0,
     ):
         """
         Generate samples from the model using DDIM.
 
         Same usage as p_sample_loop().
         """
+        del score_norm  # Not used for DDJM
         final = None
         for sample in self.ddjm_sample_loop_progressive(
             model,
@@ -1013,7 +1015,7 @@ class GaussianDiffusion:
             shrink_cond_x0=shrink_cond_x0,
         ):
             final = sample
-        return final["sample"]
+        return final["sample"], None
 
     def ddjm_sample_loop_progressive(
         self,

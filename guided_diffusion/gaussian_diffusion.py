@@ -428,6 +428,9 @@ class GaussianDiffusion:
             # manifold does not update eps using new x0. guide_x0 does.
             if model_kwargs['guide_mode'] == 'guide_x0':
                 out["eps"] = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
+
+            # logging for debugging
+            print(f"t:{t[0].item()}, mean: {th.mean(cond_score ** 2).item():.2e}")
         
         elif 'dynamic' in model_kwargs['guide_mode']:
             xstart = p_mean_var["pred_xstart"]
@@ -472,9 +475,9 @@ class GaussianDiffusion:
 
             scores = scores * sqrt_acum if model_kwargs['shrink_cond_x0'] else scores
 
-            score_norm = th.norm(scores.view(scores.shape[0], -1), dim=1)
-            scores = scores * th.where(score_norm > model_kwargs['score_norm'], model_kwargs['score_norm'] / score_norm, 1).view(-1, *([1] * (len(scores.shape) - 1)))
-            print(scores.view(scores.shape[0], -1).norm(dim=1))
+            # score_norm = th.norm(scores.view(scores.shape[0], -1), dim=1)
+            # scores = scores * th.where(score_norm > model_kwargs['score_norm'], model_kwargs['score_norm'] / score_norm, 1).view(-1, *([1] * (len(scores.shape) - 1)))
+            # print(scores.view(scores.shape[0], -1).norm(dim=1))
             # scores.clip_(-1, 1)
 
             xstart += scores
@@ -975,7 +978,7 @@ class GaussianDiffusion:
             logger.log(f"      [2-norm] fs: {tn(fs):.2e}")
         if model_kwargs['guide_mode'] == 'dynamic':
             logger.log(f"      [2-norm] fs: {tn(fs):.2e}, ps: {tn(ps):.2e}, gs: {tn(gs):.2e}, scores: {tn(scores):.2e}")        
-        return {"sample": sample, "shrink_xstart": shr_pred, 'eps': eps}
+        return {"sample": sample, "shrink_xstart": shr_pred, 'eps': eps, 'pred_xstart': x0}
 
     def ddjm_sample_loop(
         self,
@@ -1000,6 +1003,7 @@ class GaussianDiffusion:
         """
         del score_norm  # Not used for DDJM
         final = None
+        traj = []
         for sample in self.ddjm_sample_loop_progressive(
             model,
             shape,
@@ -1014,8 +1018,9 @@ class GaussianDiffusion:
             iteration=iteration,
             shrink_cond_x0=shrink_cond_x0,
         ):
+            traj.append(sample)
             final = sample
-        return final["sample"], None
+        return final["sample"], traj
 
     def ddjm_sample_loop_progressive(
         self,
@@ -1056,6 +1061,7 @@ class GaussianDiffusion:
         out = {
             "sample": img,
             "shrink_xstart": th.zeros_like(img),
+            'pred_xstart': th.zeros_like(img),
             "eps": th.zeros_like(img),
         }
         for i in indices:

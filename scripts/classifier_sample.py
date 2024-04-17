@@ -25,6 +25,7 @@ from guided_diffusion.script_util import (
     create_classifier,
     add_dict_to_argparser,
     args_to_dict,
+    ResNet18_32x32,
 )
 
 from PIL import Image
@@ -41,7 +42,7 @@ def main():
         logger.log("No classifier guidance will be used.")
     assert args.class_cond is False, "We focus on the setting where the diffusion mode is unconditional and the guidance is accomplished via an additional classifier."
     pipe = "ddim" if args.use_ddim else "ddjm" if args.use_ddjm else "ddpm"
-    args.log_dir = os.path.join(args.log_dir, f"pipe={pipe}+iter={args.iteration}+mode={args.guide_mode}+scale={args.classifier_scale}+shrink={args.shrink_cond_x0}")
+    args.log_dir = os.path.join(args.log_dir, f"steps={args.timestep_respacing}+pipe={pipe}+iter={args.iteration}+mode={args.guide_mode}+scale={args.classifier_scale}+shrink={args.shrink_cond_x0}")
     logger.configure(dir=args.log_dir)
 
     dist_util.setup_dist()
@@ -60,6 +61,7 @@ def main():
     model.eval()
 
     logger.log("loading classifier...")
+    args.has_time = True
     if args.classifier_path == "" or args.positive_label == "" or args.guide_mode is None:
         print("No guidance considered. Skipping classifier loading.")
         classifier = None
@@ -77,13 +79,18 @@ def main():
                     "classifier_scale": args.classifier_scale,
                     "positive_label": args.positive_label}
         cond_fn = get_target_cond_fn(classifier, tar_feat, args)
-    elif args.classifier_path.endswith(".pt") or args.classifier_path.endswith(".pth"):
-        classifier = create_classifier(**args_to_dict(args, classifier_defaults().keys()))
-        # from PyTorch_CIFAR10.cifar10_models import resnet
-        # classifier = resnet.resnet50()
-        classifier.load_state_dict(
-            dist_util.load_state_dict(args.classifier_path, map_location="cpu")
-        )
+    elif args.classifier_path.endswith("pt") or args.classifier_path.endswith("pth"):
+        if args.classifier_path.split("/")[-1].startswith("not"):
+            classifier = ResNet18_32x32()
+            classifier.load_state_dict(
+                dist_util.load_state_dict(args.classifier_path, map_location="cpu"))
+            args.has_time = False
+        else:
+            classifier = create_classifier(**args_to_dict(args, classifier_defaults().keys()))
+            # from PyTorch_CIFAR10.cifar10_models import resnet
+            # classifier = resnet.resnet50()
+            classifier.load_state_dict(
+                dist_util.load_state_dict(args.classifier_path, map_location="cpu"))
         classifier.to(dist_util.dev())
         if args.classifier_use_fp16:
             classifier.convert_to_fp16()
@@ -137,13 +144,14 @@ def main():
             x0_pil = [[Image.fromarray(y.cpu().numpy()) for y in time] for time in traj['pred_x0']]
             
             for i in range(len(samples_pil)):
-                save_images(samples_pil[i], os.path.join(logger.get_dir(), f"sample_{i}.png"))
-                save_images(x0_pil[i], os.path.join(logger.get_dir(), f"x0_{i}.png"))
+                if i % 50 == 0 or i == len(samples_pil) - 1:
+                    save_images(samples_pil[i], os.path.join(logger.get_dir(), f"sample_{i}.png"))
+                    save_images(x0_pil[i], os.path.join(logger.get_dir(), f"x0_{i}.png"))
             
-            gif_samples = [Image.open(os.path.join(logger.get_dir(), f"sample_{i}.png")) for i in range(len(samples_pil))]
-            gif_x0 = [Image.open(os.path.join(logger.get_dir(), f"x0_{i}.png")) for i in range(len(x0_pil))]
-            imageio.mimsave(os.path.join(logger.get_dir(), f"sample_traj.gif"), gif_samples, duration=5)
-            imageio.mimsave(os.path.join(logger.get_dir(), f"x0_traj.gif"), gif_x0, duration=5)
+            # gif_samples = [Image.open(os.path.join(logger.get_dir(), f"sample_{i}.png")) for i in range(len(samples_pil))]
+            # gif_x0 = [Image.open(os.path.join(logger.get_dir(), f"x0_{i}.png")) for i in range(len(x0_pil))]
+            # imageio.mimsave(os.path.join(logger.get_dir(), f"sample_traj.gif"), gif_samples, duration=5)
+            # imageio.mimsave(os.path.join(logger.get_dir(), f"x0_traj.gif"), gif_x0, duration=5)
 
         gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
         dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL

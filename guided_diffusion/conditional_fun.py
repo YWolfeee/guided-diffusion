@@ -40,7 +40,10 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
         assert y is not None
         with torch.enable_grad():
             x_in = x.detach().requires_grad_(True)
-            logits = classifier(x_in, t)
+            if args.has_time:
+                logits = classifier(x_in, t)
+            else:
+                logits = classifier(x_in)
             log_probs = F.log_softmax(logits, dim=-1)
             selected = log_probs[range(len(logits)), y.view(-1).long()]
 

@@ -454,58 +454,9 @@ class GaussianDiffusion:
             # manifold does not update eps using new x0. guide_x0 does.
             if model_kwargs['guide_mode'] == 'guide_x0':
                 out["eps"] = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
-            
-            # logging
-            f_mean = th.mean(real_f ** 2).item()
-            z_mean = th.mean(cond_score ** 2).item()
-            from guided_diffusion import logger
-            logger.log(f"t:{t[0].item()}, f_mean: {f_mean:.2e}, z_mean: {z_mean:.2e}")
 
-
-        elif 'zero_order' in model_kwargs['guide_mode']:
-            ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
-            # import pdb
-            # pdb.set_trace()
-            sqrt_acum = ca_t ** 0.5
-            pred_xs = p_mean_var['pred_xstart']
-            
-            # f(x0)
-            model_kwargs['zero_order'] = True
-            cond_score = cond_fn(
-                pred_xs, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
-            )
-
-            # nabla log p(xt) = - eps(x_t,t)/ sqrt{1-alpha_t}
-            nabla_logp_xt = - eps / (1 - ca_t) ** 0.5
-
-            # nabla log p(xt|x0) =  nabla log N(sqrt{alpha_t} x0, 1-alpha_t) = nabla (- (xt - sqrt{alpha_t} x0)^2 / 2(1-alpha_t)) = (xt - sqrt{alpha_t} x0) / (1-alpha_t)
-            nabla_logp_xt_x0 = (x - ca_t**0.5 * pred_xs) / (1 - ca_t)
-
-            # nabla log p(y|xt)
-            nabla_logp_y_xt = cond_score.view(-1, 1, 1, 1) * (nabla_logp_xt_x0 - nabla_logp_xt)
-            
-            # apply to eps
-            fscore = (1 - alpha_bar).sqrt() * nabla_logp_y_xt
-            eps = eps - fscore
-
-            # obtain the score on x0
-            xstart = self._predict_xstart_from_eps(x, t, eps)
-            out["pred_xstart"] = xstart
-            equi_score = pred_xs - xstart
-            
-            # obtain nabla log p(y|x0)
-            model_kwargs['zero_order'] = False
-            fs = cond_fn(
-                pred_xs, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
-            )
-
-            # element-wise product of two score
-            xstart = xstart + equi_score * fs
-
-            fmean = th.mean(equi_score * fs ** 2  * (1 - alpha_bar) / alpha_bar).item()
-
-            from guided_diffusion import logger
-            logger.log(f"t:{t[0].item()}, f_mean: {fmean:.2e}, nabla_logp_xt_x0: {th.mean(nabla_logp_xt_x0 ** 2).item():.2e}, nabla_logp_xt: {th.mean(nabla_logp_xt ** 2).item():.2e}, equi_score:{th.mean(equi_score ** 2).item():.2e}, fs:{th.mean(fs ** 2).item():.2e}")
+            # logging for debugging
+            print(f"t:{t[0].item()}, mean: {th.mean(cond_score ** 2).item():.2e}")
         
         elif 'dynamic' in model_kwargs['guide_mode']:
             xstart = p_mean_var["pred_xstart"]
@@ -549,14 +500,10 @@ class GaussianDiffusion:
             #     scores = fs
 
             scores = scores * sqrt_acum if model_kwargs['shrink_cond_x0'] else scores
-        
-            score_norm = th.norm(scores.view(scores.shape[0], -1), dim=1)
-            
-            # the ft norms given by classifier (strength=2) {'validity': 0.9062, 'inception_score': 3.595740795135498, 'fid': 91.32703273212505, 'sfid': 323.0204984310473, 'precision': 0.625, 'recall': 0.486} 
-            ft_norms = [23.6, 19.2, 18.4, 17.7, 18.1, 18.1, 17.2, 17.9, 17.1, 17.2, 15.9, 15.3, 14.7, 13.1, 11.9, 10.8, 9.88, 8.94, 7.94, 6.94, 6.05, 5.6, 4.93, 3.99, 3.53, 3.06, 2.71, 2.27, 1.75, 1.41, 1.21, 0.87, 0.663, 0.517, 0.348, 0.235, 0.136, 0.161, 0.0839, 0.0568, 0.0502, 0.0366, 0.0475, 0.0202, 0.0148, 0.0108, 0.012, 0.00697, 0.00166, 2.58e-05][::-1]
-            scores = scores * (ft_norms[t[0]] / score_norm).view(-1, *([1] * (len(scores.shape) - 1)))
-            
-            print(scores.view(scores.shape[0], -1).norm(dim=1))
+
+            # score_norm = th.norm(scores.view(scores.shape[0], -1), dim=1)
+            # scores = scores * th.where(score_norm > model_kwargs['score_norm'], model_kwargs['score_norm'] / score_norm, 1).view(-1, *([1] * (len(scores.shape) - 1)))
+            # print(scores.view(scores.shape[0], -1).norm(dim=1))
             # scores.clip_(-1, 1)
 
             xstart += scores
@@ -1037,7 +984,7 @@ class GaussianDiffusion:
             logger.log(f"      [2-norm] fs: {tn(fs):.2e}")
         if model_kwargs['guide_mode'] == 'dynamic':
             logger.log(f"      [2-norm] fs: {tn(fs):.2e}, ps: {tn(ps):.2e}, gs: {tn(gs):.2e}, scores: {tn(scores):.2e}")        
-        return {"sample": sample, "shrink_xstart": shr_pred, 'eps': eps}
+        return {"sample": sample, "shrink_xstart": shr_pred, 'eps': eps, 'pred_xstart': x0}
 
     def ddjm_sample_loop(
         self,
@@ -1053,13 +1000,16 @@ class GaussianDiffusion:
         eta=0.0,
         iteration=5,
         shrink_cond_x0=True,
+        score_norm=0,
     ):
         """
         Generate samples from the model using DDIM.
 
         Same usage as p_sample_loop().
         """
+        del score_norm  # Not used for DDJM
         final = None
+        traj = []
         for sample in self.ddjm_sample_loop_progressive(
             model,
             shape,
@@ -1074,8 +1024,9 @@ class GaussianDiffusion:
             iteration=iteration,
             shrink_cond_x0=shrink_cond_x0,
         ):
+            traj.append(sample)
             final = sample
-        return final["sample"]
+        return final["sample"], traj
 
     def ddjm_sample_loop_progressive(
         self,
@@ -1116,6 +1067,7 @@ class GaussianDiffusion:
         out = {
             "sample": img,
             "shrink_xstart": th.zeros_like(img),
+            'pred_xstart': th.zeros_like(img),
             "eps": th.zeros_like(img),
         }
         for i in indices:

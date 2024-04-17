@@ -79,6 +79,13 @@ def main():
                     "classifier_scale": args.classifier_scale,
                     "positive_label": args.positive_label}
         cond_fn = get_target_cond_fn(classifier, tar_feat, args)
+    elif 'vit' in args.classifier_path:
+        from transformers import AutoModelForImageClassification
+        classifier = AutoModelForImageClassification.from_pretrained(args.classifier_path)
+        classifier.to(dist_util.dev())
+        args.has_time = False
+        classifier.eval()
+        cond_fn, model_kwargs = get_cond_fn(classifier, args)
     elif args.classifier_path.endswith("pt") or args.classifier_path.endswith("pth"):
         if args.classifier_path.split("/")[-1].startswith("not"):
             classifier = ResNet18_32x32()
@@ -125,7 +132,8 @@ def main():
             eta=args.eta,
             iteration=args.iteration,
             shrink_cond_x0=args.shrink_cond_x0,
-            score_norm=args.score_norm
+            score_norm=args.score_norm,
+            recurrent=args.recurrent,
         )
         sample = ((sample + 1) * 127.5).clamp(0, 255).to(th.uint8)
         sample = sample.permute(0, 2, 3, 1)
@@ -245,6 +253,7 @@ def create_argparser():
         face_image3_id='00000',
         plot_args=False,
         score_norm=1e09,
+        recurrent=1,
         plot_traj=False,
     )
     defaults.update(model_and_diffusion_defaults())

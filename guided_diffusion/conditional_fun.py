@@ -43,7 +43,8 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
             if args.has_time:
                 logits = classifier(x_in, t)
             else:
-                logits = classifier(x_in)
+                from torchvision.transforms import Resize
+                logits = classifier(x_in) if 'vit' not in args.classifier_path else classifier(Resize(224)(x_in)).logits
             log_probs = F.log_softmax(logits, dim=-1)
             selected = log_probs[range(len(logits)), y.view(-1).long()]
 

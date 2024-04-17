@@ -690,6 +690,7 @@ class GaussianDiffusion:
         iteration=1,
         shrink_cond_x0=True,
         score_norm=1e08,
+        recurrent=1,
     ):
         """
         Sample x_{t-1} from the model using DDIM.
@@ -700,40 +701,48 @@ class GaussianDiffusion:
         model_kwargs['shrink_cond_x0'] = shrink_cond_x0
         model_kwargs['score_norm'] = score_norm
 
-        out = self.p_mean_variance(
-            model,
-            x,
-            t,
-            clip_denoised=clip_denoised,
-            denoised_fn=denoised_fn,
-            model_kwargs=model_kwargs,
-        )
-        out['xt'] = x.clone()
+        for _ in range(recurrent):
+            out = self.p_mean_variance(
+                model,
+                x,
+                t,
+                clip_denoised=clip_denoised,
+                denoised_fn=denoised_fn,
+                model_kwargs=model_kwargs,
+            )
+            out['xt'] = x.clone()
 
-        if cond_fn is not None:
-            for _ in range(iteration):
-                out = self.condition_score(cond_fn, out, x, t, model=model, model_kwargs=model_kwargs)
-                x = out['xt']
-        eps = out['eps']
+            if cond_fn is not None:
+                for _ in range(iteration):
+                    out = self.condition_score(cond_fn, out, x, t, model=model, model_kwargs=model_kwargs)
+                    x = out['xt']
+            eps = out['eps']
 
-        alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
-        alpha_bar_prev = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape)
-        sigma = (
-            eta
-            * th.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar))
-            * th.sqrt(1 - alpha_bar / alpha_bar_prev)
-        )
-        # Equation 12.
-        noise = th.randn_like(x)
-        # mean_pred = (
-        #     out["pred_xstart"] * th.sqrt(alpha_bar_prev)
-        #     + th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps
-        # )
-        mean_pred = out['mean']
-        nonzero_mask = (
-            (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
-        )  # no noise when t == 0
-        sample = mean_pred + nonzero_mask * sigma * noise
+            alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+            alpha_bar_prev = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape)
+            sigma = (
+                eta
+                * th.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar))
+                * th.sqrt(1 - alpha_bar / alpha_bar_prev)
+            )
+            # Equation 12.
+            noise = th.randn_like(x)
+            # mean_pred = (
+            #     out["pred_xstart"] * th.sqrt(alpha_bar_prev)
+            #     + th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps
+            # )
+            mean_pred = out['mean']
+            nonzero_mask = (
+                (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
+            )  # no noise when t == 0
+            sample = mean_pred + nonzero_mask * sigma * noise
+
+            sqrt_one_minus_beta = np.sqrt(1 - self.betas)
+            sqrt_beta = np.sqrt(self.betas)
+            
+            coeff1 = _extract_into_tensor(sqrt_one_minus_beta, t, x.shape)
+            coeff2 = _extract_into_tensor(sqrt_beta, t, x.shape)
+            x = sample * coeff1 + th.randn_like(x) * coeff2
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
     def ddim_reverse_sample(
@@ -789,6 +798,7 @@ class GaussianDiffusion:
         iteration=1,
         shrink_cond_x0=True,
         score_norm=1e09,
+        recurrent=1,
     ):
         """
         Generate samples from the model using DDIM.
@@ -811,6 +821,7 @@ class GaussianDiffusion:
             iteration=iteration,
             shrink_cond_x0=shrink_cond_x0,
             score_norm=score_norm,
+            recurrent=recurrent,
         ):
             traj.append(sample)
             final = sample
@@ -831,6 +842,7 @@ class GaussianDiffusion:
         iteration=1,
         shrink_cond_x0=True,
         score_norm=1e09,
+        recurrent=1,
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
@@ -867,7 +879,8 @@ class GaussianDiffusion:
                     eta=eta,
                     iteration=iteration,
                     shrink_cond_x0=shrink_cond_x0,
-                    score_norm=score_norm
+                    score_norm=score_norm,
+                    recurrent=recurrent
                 )
                 yield out
                 img = out["sample"]

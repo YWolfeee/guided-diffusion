@@ -50,7 +50,7 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
             if 'zero_order' in kwargs.keys() and kwargs['zero_order']:
                 return F.softmax(logits, dim=-1)[range(len(logits)), y.view(-1).long()] * args.classifier_scale
             else:
-                return torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale
+                return torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale, selected
     return cond_fn, model_kwargs
     # if args.guide_mode in ["classifier", "guide_x0", "manifold", 'unbiased', "resample"]:
     # else:

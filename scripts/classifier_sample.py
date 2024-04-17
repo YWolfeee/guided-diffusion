@@ -131,28 +131,6 @@ def main():
         sample = sample.permute(0, 2, 3, 1)
         sample = sample.contiguous()
 
-        '''
-            save the trajectory of samples and the predicted x0
-        '''
-
-        if args.plot_traj:
-            traj = {
-                'samples': [((x['sample'] + 1) * 127.5).clamp(0, 255).to(th.uint8).permute(0,2,3,1).contiguous() for x in traj],
-                'pred_x0': [((x['pred_xstart'] + 1) * 127.5).clamp(0, 255).to(th.uint8).permute(0,2,3,1).contiguous()  for x in traj]
-            }
-            samples_pil = [[Image.fromarray(y.cpu().numpy()) for y in time] for time in traj['samples']]
-            x0_pil = [[Image.fromarray(y.cpu().numpy()) for y in time] for time in traj['pred_x0']]
-            
-            for i in range(len(samples_pil)):
-                if i % 50 == 0 or i == len(samples_pil) - 1:
-                    save_images(samples_pil[i], os.path.join(logger.get_dir(), f"sample_{i}.png"))
-                    save_images(x0_pil[i], os.path.join(logger.get_dir(), f"x0_{i}.png"))
-            
-            # gif_samples = [Image.open(os.path.join(logger.get_dir(), f"sample_{i}.png")) for i in range(len(samples_pil))]
-            # gif_x0 = [Image.open(os.path.join(logger.get_dir(), f"x0_{i}.png")) for i in range(len(x0_pil))]
-            # imageio.mimsave(os.path.join(logger.get_dir(), f"sample_traj.gif"), gif_samples, duration=5)
-            # imageio.mimsave(os.path.join(logger.get_dir(), f"x0_traj.gif"), gif_x0, duration=5)
-
         gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
         dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
         all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
@@ -178,6 +156,29 @@ def main():
         img_path = out_path.replace('.npz', '.png')
         save_images(arr, img_path)
         logger.log(f"saving to {img_path}")
+
+        '''
+            save the trajectory of samples and the predicted x0
+        '''
+
+        if args.plot_traj:
+            logger.log("saving trajectory of samples and predicted x0")
+            traj = {
+                'samples': [((x['sample'] + 1) * 127.5).clamp(0, 255).to(th.uint8).permute(0,2,3,1).contiguous() for x in traj],
+                'pred_x0': [((x['pred_xstart'] + 1) * 127.5).clamp(0, 255).to(th.uint8).permute(0,2,3,1).contiguous()  for x in traj]
+            }
+            samples_pil = [[Image.fromarray(y.cpu().numpy()) for y in time] for time in traj['samples']]
+            x0_pil = [[Image.fromarray(y.cpu().numpy()) for y in time] for time in traj['pred_x0']]
+            
+            for i in range(len(samples_pil)):
+                if i % 50 == 0 or i == len(samples_pil) - 1:
+                    save_images(samples_pil[i], os.path.join(logger.get_dir(), f"sample_{i}.png"))
+                    save_images(x0_pil[i], os.path.join(logger.get_dir(), f"x0_{i}.png"))
+            
+            # gif_samples = [Image.open(os.path.join(logger.get_dir(), f"sample_{i}.png")) for i in range(len(samples_pil))]
+            # gif_x0 = [Image.open(os.path.join(logger.get_dir(), f"x0_{i}.png")) for i in range(len(x0_pil))]
+            # imageio.mimsave(os.path.join(logger.get_dir(), f"sample_traj.gif"), gif_samples, duration=5)
+            # imageio.mimsave(os.path.join(logger.get_dir(), f"x0_traj.gif"), gif_x0, duration=5)
 
     dist.barrier()
     logger.log("sampling complete")

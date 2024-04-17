@@ -437,16 +437,16 @@ class GaussianDiffusion:
             ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
             sqrt_acum = ca_t ** 0.5
             pred_xs = p_mean_var['pred_xstart']
-            cond_score = cond_fn(
+            fscore, logprob = cond_fn(
                 pred_xs, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
             )
-            cond_score = cond_score * sqrt_acum if model_kwargs['shrink_cond_x0'] else cond_score
-            # what should be added to x0 if we use time-dependent
-            real_f = (1 - alpha_bar).sqrt() * cond_fn(
-                x, self._scale_timesteps(t), **model_kwargs
-            ) * (1 - ca_t).sqrt() / ca_t.sqrt()
-            norm_rate = th.norm(real_f.view(real_f.shape[0], -1), dim=1) / th.norm(cond_score.view(cond_score.shape[0], -1), dim=1)
-            z_norm = th.norm(cond_score.view(cond_score.shape[0], -1), dim=1)
+            cond_score = fscore * sqrt_acum if model_kwargs['shrink_cond_x0'] else fscore
+            # # what should be added to x0 if we use time-dependent
+            # real_f = (1 - alpha_bar).sqrt() * cond_fn(
+            #     x, self._scale_timesteps(t), **model_kwargs
+            # ) * (1 - ca_t).sqrt() / ca_t.sqrt()
+            # norm_rate = th.norm(real_f.view(real_f.shape[0], -1), dim=1) / th.norm(cond_score.view(cond_score.shape[0], -1), dim=1)
+            # z_norm = th.norm(cond_score.view(cond_score.shape[0], -1), dim=1)
             # cond_score *= th.clip(norm_rate, max=1.0)[..., None, None, None]
             # cond_score *= th.clip(3 / z_norm, max=1.0)[..., None, None, None]
             pred_xs = pred_xs + cond_score
@@ -456,7 +456,8 @@ class GaussianDiffusion:
                 out["eps"] = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
 
             # logging for debugging
-            print(f"t:{t[0].item()}, mean: {th.mean(cond_score ** 2).item():.2e}")
+            from guided_diffusion import logger
+            logger.log(f"t:{t[0].item()}, logprob: {th.mean(logprob).item()}, mean: {th.mean(fscore ** 2).item():.2e}")
         
         elif 'dynamic' in model_kwargs['guide_mode']:
             xstart = p_mean_var["pred_xstart"]
@@ -511,15 +512,15 @@ class GaussianDiffusion:
             # print(xstart.view(xstart.shape[0], -1).norm(dim=1))
             
             p_mean = th.mean(ps ** 2).item()
-            f_mean = th.mean(scores ** 2).item()
-            f_norm = th.norm(scores.view(scores.shape[0], -1)).mean().item()
+            f_mean = th.mean(fs ** 2).item()
+            # f_norm = th.norm(scores.view(scores.shape[0], -1)).mean().item()
             gau_mean = th.mean(gs ** 2).item()
             final_mean = th.mean(xstart ** 2).item()
             out["pred_xstart"] = xstart
             # We return to the setting where epsilon is NOT changed.
             # out["eps"] = self._predict_eps_from_xstart(x, t, xstart)
             from guided_diffusion import logger
-            logger.log(f"t:{t[0].item()}, init_mean: {init_mean:.2e}, final_mean: {final_mean:.2e}, f_norm: {f_norm:.2e}, f_mean: {f_mean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}")
+            logger.log(f"t:{t[0].item()}, init_mean: {init_mean:.2e}, final_mean: {final_mean:.2e}, f_mean: {f_mean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}")
             
         elif model_kwargs['guide_mode'] == 'estimate':
             pass

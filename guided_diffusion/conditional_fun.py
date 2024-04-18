@@ -15,6 +15,7 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
     model_kwargs = {"guide_mode": args.guide_mode,
                     "classifier_scale": args.classifier_scale,
                     "positive_label": args.positive_label}
+
     model_kwargs["y"] = int(args.positive_label) * torch.ones((args.batch_size,), device=dist_util.dev(), dtype=torch.int)
     if args.guide_mode in ["None", "none", None]:
         return None, model_kwargs
@@ -31,7 +32,11 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
         #         return torch.autograd.grad(selected.sum(), xt_in)[0] * args.classifier_scale
         # return the classifier directly and compute gradient in the loop
         def model_fun(x, t, y=None, **kwargs):
-            logits = classifier(x, t)
+            if args.has_time:
+                logits = classifier(x, t)
+            else:
+                from torchvision.transforms import Resize
+                logits = classifier(x) if 'vit' not in args.classifier_path else classifier(Resize(224)(x)).logits
             log_probs = F.log_softmax(logits, dim=-1)
             selected = log_probs[range(len(logits)), y.view(-1).long()]
             return selected * args.classifier_scale

@@ -690,6 +690,7 @@ class GaussianDiffusion:
         shrink_cond_x0=True,
         score_norm=1e08,
         recurrent=1,
+        recurrentV2=1
     ):
         """
         Sample x_{t-1} from the model using DDIM.
@@ -700,25 +701,41 @@ class GaussianDiffusion:
         model_kwargs['shrink_cond_x0'] = shrink_cond_x0
         model_kwargs['score_norm'] = score_norm
 
+        sqrt_one_minus_beta = np.sqrt(1 - self.betas)
+        sqrt_beta = np.sqrt(self.betas)
+        
+        coeff1 = _extract_into_tensor(sqrt_one_minus_beta, t, x.shape)
+        coeff2 = _extract_into_tensor(sqrt_beta, t, x.shape)
+
+        alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+        alpha_bar_prev = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape)
+        
         for _ in range(recurrent):
-            out = self.p_mean_variance(
-                model,
-                x,
-                t,
-                clip_denoised=clip_denoised,
-                denoised_fn=denoised_fn,
-                model_kwargs=model_kwargs,
-            )
-            out['xt'] = x.clone()
 
-            if cond_fn is not None:
-                for _ in range(iteration):
-                    out = self.condition_score(cond_fn, out, x, t, model=model, model_kwargs=model_kwargs)
-                    x = out['xt']
-            eps = out['eps']
+            for __ in range(recurrentV2):
 
-            alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
-            alpha_bar_prev = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape)
+                # xt -> x0
+                out = self.p_mean_variance(
+                    model,
+                    x,
+                    t,
+                    clip_denoised=clip_denoised,
+                    denoised_fn=denoised_fn,
+                    model_kwargs=model_kwargs,
+                )
+                out['xt'] = x.clone()
+
+                if cond_fn is not None:
+                    for _ in range(iteration):
+                        out = self.condition_score(cond_fn, out, x, t, model=model, model_kwargs=model_kwargs)
+                        x = out['xt']
+                
+                eps = out['eps']
+                x = out['mean'] * th.sqrt(alpha_bar) + th.sqrt(1 - alpha_bar) * th.randn_like(x)
+                # x = sample * coeff1 + th.randn_like(x) * coeff2
+
+            # alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+            # alpha_bar_prev = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape)
             sigma = (
                 eta
                 * th.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar))
@@ -736,11 +753,7 @@ class GaussianDiffusion:
             )  # no noise when t == 0
             sample = mean_pred + nonzero_mask * sigma * noise
 
-            sqrt_one_minus_beta = np.sqrt(1 - self.betas)
-            sqrt_beta = np.sqrt(self.betas)
             
-            coeff1 = _extract_into_tensor(sqrt_one_minus_beta, t, x.shape)
-            coeff2 = _extract_into_tensor(sqrt_beta, t, x.shape)
             x = sample * coeff1 + th.randn_like(x) * coeff2
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
@@ -798,6 +811,7 @@ class GaussianDiffusion:
         shrink_cond_x0=True,
         score_norm=1e09,
         recurrent=1,
+        recurrentV2=1
     ):
         """
         Generate samples from the model using DDIM.
@@ -821,6 +835,7 @@ class GaussianDiffusion:
             shrink_cond_x0=shrink_cond_x0,
             score_norm=score_norm,
             recurrent=recurrent,
+            recurrentV2=recurrentV2
         ):
             traj.append(sample)
             final = sample
@@ -842,6 +857,7 @@ class GaussianDiffusion:
         shrink_cond_x0=True,
         score_norm=1e09,
         recurrent=1,
+        recurrentV2=1
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
@@ -879,7 +895,8 @@ class GaussianDiffusion:
                     iteration=iteration,
                     shrink_cond_x0=shrink_cond_x0,
                     score_norm=score_norm,
-                    recurrent=recurrent
+                    recurrent=recurrent,
+                    recurrentV2=recurrentV2
                 )
                 yield out
                 img = out["sample"]

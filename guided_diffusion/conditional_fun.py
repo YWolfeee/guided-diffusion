@@ -48,8 +48,8 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
             log_probs = F.log_softmax(logits, dim=-1)
             selected = log_probs[range(len(logits)), y.view(-1).long()]
 
-            if 'zero_order' in kwargs.keys() and kwargs['zero_order']:
-                return F.softmax(logits, dim=-1)[range(len(logits)), y.view(-1).long()] * args.classifier_scale
+            if kwargs['guide_mode'] == 'zero_order':
+                return torch.zeros_like(x_in), F.softmax(logits, dim=-1)[range(len(logits)), y.view(-1).long()] * args.classifier_scale
             else:
                 return torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale, selected
     return cond_fn, model_kwargs

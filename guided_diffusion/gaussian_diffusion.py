@@ -523,9 +523,44 @@ class GaussianDiffusion:
             from guided_diffusion import logger
             logger.log(f"t:{t[0].item()}, logprob: {l_mean:.2e}, f_mean: {f_mean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}, init_mean: {init_mean:.2e}, final_mean: {final_mean:.2e}")
             
-        elif model_kwargs['guide_mode'] == 'estimate':
+        elif model_kwargs['guide_mode'] in ['zero_order', 'mc']:
             pass
-        
+            # we try to use the zero-order information to approximate the gradient
+            # mathematically, we have the following equation:
+            # \nabla_x E_{\epsilon \sim \mu} [f(x + \epsilon)] = - E_{\epsilon \sim \mu} [f(x + \epsilon)  \nabla_\epsilon \log p(\epsilon)]
+            # where \mu is the distribution of \epsilon
+
+            # we here assume that x ~ N(\hat x_0, sigma_t^2 I)
+            # so \nabla_\epsilon \log p(\epsilon) = - \epsilon / sigma_t^2
+            # A more accurate estimation can be provided by computing \nabla^2 p(x_t)
+            x0 = p_mean_var['pred_xstart']
+            # sigma = _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x0.shape)
+            sigma = 0.01
+            eps_btz = 32 # number of epsilon we sample
+            fscore = th.zeros_like(x0)
+            for _ in range(1):
+                eps =  sigma * th.randn(eps_btz, *x0.shape, device=x0.device)
+                x_in = (x0[None] + eps).reshape(-1, *x0.shape[1:])
+                grad, logprob = cond_fn(x_in, self._scale_timesteps(th.zeros_like(t)), 
+                                guide_mode=model_kwargs['guide_mode'],
+                                y=model_kwargs['y'][None].expand(eps_btz,-1).reshape(-1)
+                )
+                if model_kwargs['guide_mode'] == 'zero_order':
+                    logprob = logprob.reshape(eps_btz, -1)
+                    estimation = logprob[..., None, None, None] * eps / sigma ** 2
+                elif model_kwargs['guide_mode'] == 'mc':
+                    estimation = grad.reshape(eps_btz, -1, *x0.shape[1:])
+                fscore += th.mean(estimation, dim=0)
+            fscore /= 1
+
+            cond_score = fscore * sqrt_acum if model_kwargs['shrink_cond_x0'] else fscore
+            xstart = x0 + cond_score
+            out["pred_xstart"] = xstart
+
+            # logging for debugging
+            from guided_diffusion import logger
+            logger.log(f"t:{t[0].item()}, logprob: {th.mean(logprob).item()}, mean: {th.mean(fscore ** 2).item():.2e}")
+
 
         out["mean"], _, _ = self.q_posterior_mean_variance(
             x_start=out["pred_xstart"], x_t=out['xt'], t=t

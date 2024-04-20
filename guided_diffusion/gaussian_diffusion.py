@@ -465,7 +465,7 @@ class GaussianDiffusion:
             ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
             sqrt_acum = ca_t ** 0.5
             # compute (1-ca_t) * scores of p(x0), p(xt|x0), and p(y|x0)
-            fs = cond_fn(
+            fs, logprob = cond_fn(
                 xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
             ) #* (1-ca_t)
             ps = -(1-ca_t)**0.5 * self.p_mean_variance(model=model, x=xstart, t=th.zeros_like(t))['eps']
@@ -511,6 +511,7 @@ class GaussianDiffusion:
             # xstart.clip_(-1, 1)
             # print(xstart.view(xstart.shape[0], -1).norm(dim=1))
             
+            l_mean = th.mean(logprob).item()
             p_mean = th.mean(ps ** 2).item()
             f_mean = th.mean(fs ** 2).item()
             # f_norm = th.norm(scores.view(scores.shape[0], -1)).mean().item()
@@ -520,7 +521,7 @@ class GaussianDiffusion:
             # We return to the setting where epsilon is NOT changed.
             # out["eps"] = self._predict_eps_from_xstart(x, t, xstart)
             from guided_diffusion import logger
-            logger.log(f"t:{t[0].item()}, init_mean: {init_mean:.2e}, final_mean: {final_mean:.2e}, f_mean: {f_mean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}")
+            logger.log(f"t:{t[0].item()}, logprob: {l_mean:.2e}, f_mean: {f_mean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}, init_mean: {init_mean:.2e}, final_mean: {final_mean:.2e}")
             
         elif model_kwargs['guide_mode'] == 'estimate':
             pass

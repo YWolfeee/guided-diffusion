@@ -36,6 +36,27 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
             selected = log_probs[range(len(logits)), y.view(-1).long()]
             return selected * args.classifier_scale
         return model_fun, model_kwargs
+    elif 'mc' in args.guide_mode:
+        def cond_fn(x, t, eps_btz, sigma, y=None, **kwargs):
+            assert y is not None
+            eps =  sigma * torch.randn(eps_btz, *x.shape, device=x.device)
+            with torch.enable_grad():
+                x_in = x.detach().requires_grad_(True)
+                x = (x_in[None] + eps).reshape(-1, *x_in.shape[1:])
+                
+                if args.has_time:
+                    logits = classifier(x, t)
+                else:
+                    from torchvision.transforms import Resize
+                    logits = classifier(x) if 'vit' not in args.classifier_path else classifier(Resize(224)(x)).logits
+                probs = F.softmax(logits, dim=-1)
+                
+                selected = probs[range(len(logits)), y.view(-1).long()].reshape(-1, x_in.shape[0])  # btz * x_in.shape[0]
+                avg_logprob = torch.log(selected.mean(dim=0))
+                return torch.autograd.grad(avg_logprob.sum(), x_in)[0] * args.classifier_scale, avg_logprob
+
+        return cond_fn, model_kwargs
+
     def cond_fn(x, t, y=None, **kwargs):
         assert y is not None
         with torch.enable_grad():
@@ -50,6 +71,11 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
 
             if kwargs['guide_mode'] == 'zero_order':
                 return torch.zeros_like(x_in), F.softmax(logits, dim=-1)[range(len(logits)), y.view(-1).long()] * args.classifier_scale
+            elif kwargs['guide_mode'] == 'classifier':
+                logits0 = classifier(kwargs['x0'], torch.zeros_like(t))
+                log_probs0 = F.log_softmax(logits0, dim=-1)
+                selected0 = log_probs0[range(len(logits0)), y.view(-1).long()]
+                return torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale, selected0
             else:
                 return torch.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale, selected
     return cond_fn, model_kwargs

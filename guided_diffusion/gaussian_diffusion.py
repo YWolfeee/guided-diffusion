@@ -391,20 +391,21 @@ class GaussianDiffusion:
         from Song et al (2020).
         """
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
-
+        ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+        sqrt_acum = ca_t ** 0.5
+            
         out = p_mean_var.copy()
 
         eps = self._predict_eps_from_xstart(x, t, p_mean_var["pred_xstart"])
 
         if model_kwargs['guide_mode'] == 'classifier':
-            fscore = (1 - alpha_bar).sqrt() * cond_fn(
-                x, self._scale_timesteps(t), **model_kwargs
-            )
+            grad, logprob = cond_fn(x, self._scale_timesteps(t), 
+                                    x0 = p_mean_var["pred_xstart"], **model_kwargs)
+            fscore = (1 - alpha_bar).sqrt() * grad
             eps = eps - fscore
             # Think about the relation between \hat x0 and eps
 
             fmean = th.mean(fscore ** 2  * (1 - alpha_bar) / alpha_bar).item()
-            fnorm = th.norm((fscore * th.sqrt((1-alpha_bar) / alpha_bar)).view(fscore.shape[0], -1), dim=1).mean().item()
 
             ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
 
@@ -412,12 +413,13 @@ class GaussianDiffusion:
             out["pred_xstart"] = xstart
             from guided_diffusion import logger
 
-            ps = -(1-ca_t)**0.5 * self.p_mean_variance(model=model, x=xstart, t=th.zeros_like(t))['eps']
-            gs = (ca_t) ** 0.5 * (x - ca_t**0.5 * xstart)
-            p_mean = th.mean(ps ** 2).item()
-            gau_mean = th.mean(gs ** 2).item()
+            # ps = -(1-ca_t)**0.5 * self.p_mean_variance(model=model, x=xstart, t=th.zeros_like(t))['eps']
+            # gs = (ca_t) ** 0.5 * (x - ca_t**0.5 * xstart)
+            # p_mean = th.mean(ps ** 2).item()
+            # gau_mean = th.mean(gs ** 2).item()
+            l_mean = th.mean(logprob).item()
 
-            logger.log(f"t:{t[0].item()}, f_norm: {fnorm:.2e}, f_mean: {fmean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}")
+            logger.log(f"t:{t[0].item()}, logprob: {l_mean:.2e}, f_mean: {fmean:.2e}")
 
         elif model_kwargs["guide_mode"] == 'freedom':
             with th.enable_grad():
@@ -427,15 +429,12 @@ class GaussianDiffusion:
                 scaled_log_probs = cond_fn(x0, self._scale_timesteps(th.zeros_like(t)), **model_kwargs)
                 fs = th.autograd.grad(scaled_log_probs.sum(), x_in)[0]
 
-            sqrt_acum = _extract_into_tensor(self.sqrt_alphas_cumprod, t, x.shape)
             fs = fs * sqrt_acum if model_kwargs['shrink_cond_x0'] else fs
             out["xt"] += fs
             # out['pred_xstart'] = self._predict_xstart_from_eps(out['xt'], t, eps)
             
         
         elif model_kwargs['guide_mode'] in ['guide_x0', 'manifold']:
-            ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
-            sqrt_acum = ca_t ** 0.5
             pred_xs = p_mean_var['pred_xstart']
             fscore, logprob = cond_fn(
                 pred_xs, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
@@ -462,8 +461,6 @@ class GaussianDiffusion:
         elif 'dynamic' in model_kwargs['guide_mode']:
             xstart = p_mean_var["pred_xstart"]
             init_mean = th.mean(xstart ** 2).item()
-            ca_t = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
-            sqrt_acum = ca_t ** 0.5
             # compute (1-ca_t) * scores of p(x0), p(xt|x0), and p(y|x0)
             fs, logprob = cond_fn(
                 xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
@@ -523,7 +520,7 @@ class GaussianDiffusion:
             from guided_diffusion import logger
             logger.log(f"t:{t[0].item()}, logprob: {l_mean:.2e}, f_mean: {f_mean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}, init_mean: {init_mean:.2e}, final_mean: {final_mean:.2e}")
             
-        elif model_kwargs['guide_mode'] in ['zero_order', 'mc']:
+        elif 'mc' in model_kwargs['guide_mode']:
             pass
             # we try to use the zero-order information to approximate the gradient
             # mathematically, we have the following equation:
@@ -534,25 +531,23 @@ class GaussianDiffusion:
             # so \nabla_\epsilon \log p(\epsilon) = - \epsilon / sigma_t^2
             # A more accurate estimation can be provided by computing \nabla^2 p(x_t)
             x0 = p_mean_var['pred_xstart']
-            # sigma = _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x0.shape)
-            sigma = 0.01
-            eps_btz = 32 # number of epsilon we sample
-            fscore = th.zeros_like(x0)
-            for _ in range(1):
-                eps =  sigma * th.randn(eps_btz, *x0.shape, device=x0.device)
-                x_in = (x0[None] + eps).reshape(-1, *x0.shape[1:])
-                grad, logprob = cond_fn(x_in, self._scale_timesteps(th.zeros_like(t)), 
-                                guide_mode=model_kwargs['guide_mode'],
-                                y=model_kwargs['y'][None].expand(eps_btz,-1).reshape(-1)
-                )
-                if model_kwargs['guide_mode'] == 'zero_order':
-                    logprob = logprob.reshape(eps_btz, -1)
-                    estimation = logprob[..., None, None, None] * eps / sigma ** 2
-                elif model_kwargs['guide_mode'] == 'mc':
-                    estimation = grad.reshape(eps_btz, -1, *x0.shape[1:])
-                fscore += th.mean(estimation, dim=0)
-            fscore /= 1
-
+            sigma = _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x0.shape)
+            if model_kwargs['guide_mode'] == 'mc_sq':
+                sigma = sigma ** 2
+            elif model_kwargs['guide_mode'].startswith("mcscale"):
+                sigma = float(model_kwargs['guide_mode'][7:]) * sigma
+            else:
+                sigma = float(model_kwargs['guide_mode'][2:])
+            eps_btz = 16 # number of epsilon we sample
+            fscore, logprob = cond_fn(
+                x0, 
+                self._scale_timesteps(th.zeros_like(t)), 
+                guide_mode=model_kwargs['guide_mode'],
+                y=model_kwargs['y'][None].expand(eps_btz,-1).reshape(-1),
+                eps_btz=eps_btz,
+                sigma=sigma,
+            )
+            
             cond_score = fscore * sqrt_acum if model_kwargs['shrink_cond_x0'] else fscore
             xstart = x0 + cond_score
             out["pred_xstart"] = xstart

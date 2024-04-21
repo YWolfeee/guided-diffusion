@@ -42,7 +42,7 @@ def main():
         logger.log("No classifier guidance will be used.")
     assert args.class_cond is False, "We focus on the setting where the diffusion mode is unconditional and the guidance is accomplished via an additional classifier."
     pipe = "ddim" if args.use_ddim else "ddjm" if args.use_ddjm else "ddpm"
-    args.log_dir = os.path.join(args.log_dir, f"steps={args.timestep_respacing}+pipe={pipe}+iter={args.iteration}+mode={args.guide_mode}+scale={args.classifier_scale}+shrink={args.shrink_cond_x0}")
+    args.log_dir = os.path.join(args.log_dir, f"steps={args.timestep_respacing}+pipe={pipe}+iter={args.iteration}+mode={args.guide_mode}+scale={args.classifier_scale}+shrink={args.shrink_cond_x0}+recurrent={args.recurrent}")
     logger.configure(dir=args.log_dir)
 
     dist_util.setup_dist()

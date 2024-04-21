@@ -521,7 +521,7 @@ class GaussianDiffusion:
             logger.log(f"t:{t[0].item()}, logprob: {l_mean:.2e}, f_mean: {f_mean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}, init_mean: {init_mean:.2e}, final_mean: {final_mean:.2e}")
             
         elif 'mc' in model_kwargs['guide_mode']:
-            pass
+
             # we try to use the zero-order information to approximate the gradient
             # mathematically, we have the following equation:
             # \nabla_x E_{\epsilon \sim \mu} [f(x + \epsilon)] = - E_{\epsilon \sim \mu} [f(x + \epsilon)  \nabla_\epsilon \log p(\epsilon)]
@@ -532,13 +532,18 @@ class GaussianDiffusion:
             # A more accurate estimation can be provided by computing \nabla^2 p(x_t)
             x0 = p_mean_var['pred_xstart']
             sigma = _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x0.shape)
-            if model_kwargs['guide_mode'] == 'mc_sq':
+            if model_kwargs['guide_mode'].startswith('mc_sq'):
                 sigma = sigma ** 2
+                eps_btz = int(model_kwargs['guide_mode'][3:].split("_")[-1])
             elif model_kwargs['guide_mode'].startswith("mcscale"):
-                sigma = float(model_kwargs['guide_mode'][7:]) * sigma
-            else:
-                sigma = float(model_kwargs['guide_mode'][2:])
-            eps_btz = 16 # number of epsilon we sample
+                scale, eps_btz = model_kwargs['guide_mode'][7:].split("_")
+                sigma, eps_btz = float(scale) * sigma, int(eps_btz)
+            elif model_kwargs['guide_mode'].startswith("mc_"):
+                eps_btz = int(model_kwargs['guide_mode'][3:])
+            elif model_kwargs['guide_mode'].startswith("mc"):
+                scale, eps_btz = model_kwargs['guide_mode'][2:].split("_")
+                sigma, eps_btz = float(scale), int(eps_btz)
+            
             fscore, logprob = cond_fn(
                 x0, 
                 self._scale_timesteps(th.zeros_like(t)), 

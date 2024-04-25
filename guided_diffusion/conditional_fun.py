@@ -53,7 +53,7 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
                 
                 selected = probs[range(len(logits)), y.view(-1).long()].reshape(-1, x_in.shape[0])  # btz * x_in.shape[0]
                 avg_logprob = torch.log(selected.mean(dim=0))
-                return torch.autograd.grad(avg_logprob.sum(), x_in)[0] * args.classifier_scale, avg_logprob
+                return [torch.autograd.grad(avg_logprob.sum(), x_in)[0] * args.classifier_scale, - eps / sigma ** 2], avg_logprob
 
         return cond_fn, model_kwargs
 

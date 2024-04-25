@@ -11,7 +11,7 @@ import numpy as np
 import torch as th
 import torch.distributed as dist
 import torch.nn.functional as F
-import imageio
+import tensorflow.compat.v1 as tf
 np.random.seed(0)
 th.manual_seed(0)
 
@@ -42,7 +42,11 @@ def main():
         logger.log("No classifier guidance will be used.")
     assert args.class_cond is False, "We focus on the setting where the diffusion mode is unconditional and the guidance is accomplished via an additional classifier."
     pipe = "ddim" if args.use_ddim else "ddjm" if args.use_ddjm else "ddpm"
-    args.log_dir = os.path.join(args.log_dir, f"steps={args.timestep_respacing}+pipe={pipe}+iter={args.iteration}+mode={args.guide_mode}+scale={args.classifier_scale}+shrink={args.shrink_cond_x0}+recurrent={args.recurrent}")
+    runname = f"steps={args.timestep_respacing}+pipe={pipe}+iter={args.iteration}+mode={args.guide_mode}+scale={args.classifier_scale}+shrink={args.shrink_cond_x0}+recurrent={args.recurrent}"
+    if args.tag:
+        runname += f"+{args.tag}"
+    args.log_dir = os.path.join(args.log_dir, runname)
+
     logger.configure(dir=args.log_dir)
 
     dist_util.setup_dist()
@@ -200,7 +204,8 @@ def main():
         eval_args.sample_batch = out_path
         eval_args.classifier_path = args.test_classifier_path if args.test_classifier_path else args.classifier_path
         eval_args.label = int(args.positive_label) if args.guide_mode is not None else None
-        eval_args.output_path = os.path.join(logger.get_dir(), 'log.json')
+        eval_args.output_path = os.path.join(logger.get_dir(), 
+                                             out_path.split("/")[-1].split(".")[0]+ '.json')
         from evaluations.evaluator import main as evaluator_main
         logger.log(f"Running evaluator with args: {eval_args}")
         evaluator_main(eval_args)
@@ -246,7 +251,7 @@ def create_argparser():
         ref_batch=None,
         test_classifier_path="",
         model_id=None,
-        iteration=10,
+        iteration=1,
         shrink_cond_x0=True,    # whether to shrink the score of x0 by at
         faceid_loss_type='cosine',
         face_image1_id='00000',
@@ -256,6 +261,7 @@ def create_argparser():
         score_norm=1e09,
         recurrent=1,
         plot_traj=False,
+        tag="",
     )
     defaults.update(model_and_diffusion_defaults())
     defaults.update(classifier_defaults())

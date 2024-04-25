@@ -439,7 +439,8 @@ class GaussianDiffusion:
             fscore, logprob = cond_fn(
                 pred_xs, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
             )
-            cond_score = fscore * sqrt_acum if model_kwargs['shrink_cond_x0'] else fscore
+
+            cond_score = fscore * (1-ca_t)**0.5 if model_kwargs['shrink_cond_x0'] else fscore
             # # what should be added to x0 if we use time-dependent
             # real_f = (1 - alpha_bar).sqrt() * cond_fn(
             #     x, self._scale_timesteps(t), **model_kwargs
@@ -532,28 +533,32 @@ class GaussianDiffusion:
             # A more accurate estimation can be provided by computing \nabla^2 p(x_t)
             x0 = p_mean_var['pred_xstart']
             sigma = _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x0.shape)
-            if model_kwargs['guide_mode'].startswith('mc_sq'):
-                sigma = sigma ** 2
-                eps_btz = int(model_kwargs['guide_mode'][3:].split("_")[-1])
-            elif model_kwargs['guide_mode'].startswith("mcscale"):
+            if model_kwargs['guide_mode'].startswith("mcscale"):
                 scale, eps_btz = model_kwargs['guide_mode'][7:].split("_")
-                sigma, eps_btz = float(scale) * sigma, int(eps_btz)
-            elif model_kwargs['guide_mode'].startswith("mc_"):
-                eps_btz = int(model_kwargs['guide_mode'][3:])
-            elif model_kwargs['guide_mode'].startswith("mc"):
-                scale, eps_btz = model_kwargs['guide_mode'][2:].split("_")
-                sigma, eps_btz = float(scale), int(eps_btz)
+                std, eps_btz = float(scale) * sigma, int(eps_btz)
+            elif model_kwargs['guide_mode'].startswith("mcsqscale"):
+                scale, eps_btz = model_kwargs['guide_mode'][9:].split("_")
+                std, eps_btz = float(scale) * sigma, int(eps_btz)
+            # elif model_kwargs['guide_mode'].startswith("mc_"):
+            #     eps_btz = int(model_kwargs['guide_mode'][3:])
+            #     std = sigma
+            # elif model_kwargs['guide_mode'].startswith("mc"):
+            #     scale, eps_btz = model_kwargs['guide_mode'][2:].split("_")
+            #     std, eps_btz = float(scale), int(eps_btz)
+            else:
+                raise NotImplementedError(model_kwargs['guide_mode'])
             
-            fscore, logprob = cond_fn(
+            grads, logprob = cond_fn(
                 x0, 
                 self._scale_timesteps(th.zeros_like(t)), 
                 guide_mode=model_kwargs['guide_mode'],
                 y=model_kwargs['y'][None].expand(eps_btz,-1).reshape(-1),
                 eps_btz=eps_btz,
-                sigma=sigma,
+                sigma=std,
             )
-            
-            cond_score = fscore * sqrt_acum if model_kwargs['shrink_cond_x0'] else fscore
+            fscore, gscore = grads
+            coef = sigma ** 2 if "mcsqscale" in model_kwargs['guide_mode'] else sigma
+            cond_score = fscore * coef if model_kwargs['shrink_cond_x0'] else fscore
             xstart = x0 + cond_score
             out["pred_xstart"] = xstart
 
@@ -767,7 +772,9 @@ class GaussianDiffusion:
             #     out["pred_xstart"] * th.sqrt(alpha_bar_prev)
             #     + th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps
             # )
-            mean_pred = out['mean']
+            mean_pred, _, _ = self.q_posterior_mean_variance(
+                x_start=out["pred_xstart"], x_t=x, t=t
+            )
             nonzero_mask = (
                 (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
             )  # no noise when t == 0

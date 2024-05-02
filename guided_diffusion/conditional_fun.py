@@ -36,7 +36,7 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
             selected = log_probs[range(len(logits)), y.view(-1).long()]
             return selected * args.classifier_scale
         return model_fun, model_kwargs
-    elif 'mc' in args.guide_mode:
+    elif 'mc' in args.guide_mode or 'dynamic' in args.guide_mode:
         def cond_fn(x, t, eps_btz, sigma, y=None, **kwargs):
             assert y is not None
             eps =  sigma * torch.randn(eps_btz, *x.shape, device=x.device)
@@ -52,8 +52,9 @@ def get_cond_fn(classifier: EncoderUNetModel, args: Namespace
                 probs = F.softmax(logits, dim=-1)
                 
                 selected = probs[range(len(logits)), y.view(-1).long()].reshape(-1, x_in.shape[0])  # btz * x_in.shape[0]
-                avg_logprob = torch.log(selected.mean(dim=0))
-                return [torch.autograd.grad(avg_logprob.sum(), x_in)[0] * args.classifier_scale, - eps / sigma ** 2], avg_logprob
+                avg_logprob = torch.log(torch.max(selected, dim=0)[0])
+                score = torch.autograd.grad(avg_logprob.sum(), x_in)[0]
+                return [score * args.classifier_scale, eps.mean(dim=0)], avg_logprob
 
         return cond_fn, model_kwargs
 

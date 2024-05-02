@@ -459,69 +459,7 @@ class GaussianDiffusion:
             from guided_diffusion import logger
             logger.log(f"t:{t[0].item()}, logprob: {th.mean(logprob).item()}, mean: {th.mean(fscore ** 2).item():.2e}")
         
-        elif 'dynamic' in model_kwargs['guide_mode']:
-            xstart = p_mean_var["pred_xstart"]
-            init_mean = th.mean(xstart ** 2).item()
-            # compute (1-ca_t) * scores of p(x0), p(xt|x0), and p(y|x0)
-            fs, logprob = cond_fn(
-                xstart, self._scale_timesteps(th.zeros_like(t)), **model_kwargs
-            ) #* (1-ca_t)
-            ps = -(1-ca_t)**0.5 * self.p_mean_variance(model=model, x=xstart, t=th.zeros_like(t))['eps']
-            gs = (ca_t) ** 0.5 * (x - ca_t**0.5 * xstart)
-
-            # sum over scores based on strategy
-            scores = 0
-            if model_kwargs['guide_mode'] == 'dynamic-two-0.1':
-                fs = fs * (1-ca_t)
-                scores = fs + 0.1 * (ps + gs)
-            elif model_kwargs['guide_mode'] == 'dynamic-two-0.1-a':
-                fs = fs * (1-ca_t)
-                scores = fs + 0.1 * ca_t * (1-ca_t) * (ps + gs)
-            elif model_kwargs['guide_mode'] == 'dynamic-two-0.1-did':
-                scores = fs + 0.1 * (ps + gs)
-            elif model_kwargs['guide_mode'] == 'dynamic-two-0.1-a-did':
-                scores = fs + 0.1 * ca_t * (ps + gs)
-            elif model_kwargs['guide_mode'] == 'dynamic-manifold':
-                scores = fs
-
-            else:
-                raise NotImplementedError(model_kwargs['guide_mode'])
-            # elif model_kwargs['guide_mode'] == 'dynamic-nog-0.5*a':
-            #     scores = fs + 0.5 * ca_t * ps
-            # elif model_kwargs['guide_mode'] == 'dynamic-nog-0.1*a':
-            #     scores = fs + 0.1 * ca_t * ps
-            # elif model_kwargs['guide_mode'] == 'dynamic-nog-0.5':
-            #     scores = fs + 0.5 * ps
-            # elif model_kwargs['guide_mode'] == 'dynamic-nog-0.1':
-            #     scores = fs + 0.1 * ps
-            # elif model_kwargs['guide_mode'] == 'dynamic-fonly':
-            #     # This should match guide_x0
-            #     scores = fs
-
-            scores = scores * sqrt_acum if model_kwargs['shrink_cond_x0'] else scores
-
-            # score_norm = th.norm(scores.view(scores.shape[0], -1), dim=1)
-            # scores = scores * th.where(score_norm > model_kwargs['score_norm'], model_kwargs['score_norm'] / score_norm, 1).view(-1, *([1] * (len(scores.shape) - 1)))
-            # print(scores.view(scores.shape[0], -1).norm(dim=1))
-            # scores.clip_(-1, 1)
-
-            xstart += scores
-            # xstart.clip_(-1, 1)
-            # print(xstart.view(xstart.shape[0], -1).norm(dim=1))
-            
-            l_mean = th.mean(logprob).item()
-            p_mean = th.mean(ps ** 2).item()
-            f_mean = th.mean(fs ** 2).item()
-            # f_norm = th.norm(scores.view(scores.shape[0], -1)).mean().item()
-            gau_mean = th.mean(gs ** 2).item()
-            final_mean = th.mean(xstart ** 2).item()
-            out["pred_xstart"] = xstart
-            # We return to the setting where epsilon is NOT changed.
-            # out["eps"] = self._predict_eps_from_xstart(x, t, xstart)
-            from guided_diffusion import logger
-            logger.log(f"t:{t[0].item()}, logprob: {l_mean:.2e}, f_mean: {f_mean:.2e}, p_mean: {p_mean:.2e}, gau_mean: {gau_mean:.2e}, init_mean: {init_mean:.2e}, final_mean: {final_mean:.2e}")
-            
-        elif 'mc' in model_kwargs['guide_mode']:
+        if 'mc' in model_kwargs['guide_mode']:
 
             # we try to use the zero-order information to approximate the gradient
             # mathematically, we have the following equation:
@@ -539,12 +477,6 @@ class GaussianDiffusion:
             elif model_kwargs['guide_mode'].startswith("mcsqscale"):
                 scale, eps_btz = model_kwargs['guide_mode'][9:].split("_")
                 std, eps_btz = float(scale) * sigma, int(eps_btz)
-            # elif model_kwargs['guide_mode'].startswith("mc_"):
-            #     eps_btz = int(model_kwargs['guide_mode'][3:])
-            #     std = sigma
-            # elif model_kwargs['guide_mode'].startswith("mc"):
-            #     scale, eps_btz = model_kwargs['guide_mode'][2:].split("_")
-            #     std, eps_btz = float(scale), int(eps_btz)
             else:
                 raise NotImplementedError(model_kwargs['guide_mode'])
             
@@ -556,15 +488,61 @@ class GaussianDiffusion:
                 eps_btz=eps_btz,
                 sigma=std,
             )
-            fscore, gscore = grads
-            coef = sigma ** 2 if "mcsqscale" in model_kwargs['guide_mode'] else sigma
+            fscore, _ = grads
+            if "mcsqscale" in model_kwargs['guide_mode']:
+                coef = sigma ** 2
+                cond_score = fscore * coef
+            elif "mcscale" in model_kwargs['guide_mode']:
+                coef = sigma
+                cond_score = fscore * coef
+            else:
+                raise NotImplementedError(model_kwargs['guide_mode'])
+            
             cond_score = fscore * coef if model_kwargs['shrink_cond_x0'] else fscore
             xstart = x0 + cond_score
             out["pred_xstart"] = xstart
+            out['logprob'] = logprob
 
             # logging for debugging
             from guided_diffusion import logger
             logger.log(f"t:{t[0].item()}, logprob: {th.mean(logprob).item()}, mean: {th.mean(fscore ** 2).item():.2e}")
+        elif 'dynamic_' in model_kwargs['guide_mode']:
+            x0 = p_mean_var['pred_xstart']
+            sigma = _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x0.shape)
+            dmode, scale, n_dy = model_kwargs['guide_mode'][8:].split("_")
+            assert dmode in ['eps+f', '3steps', '2divide']
+            # eps + f means that the score is f (divide by 0.01^2)
+            # 3steps is first eps then gaussian then f (divide by 0.01^2)
+            # 2divide is first eps then f + g (divide by 0.01^2)
+            std = float(scale) * sigma
+
+            xd = x0.clone()
+            for i in range(int(n_dy)):
+                xd = xd + th.randn_like(xd) * std
+                if dmode == '3steps':
+                    xd += (x0 - xd) / 2
+                grads, logprob = cond_fn(
+                    xd, 
+                    self._scale_timesteps(th.zeros_like(t)), 
+                    guide_mode=model_kwargs['guide_mode'],
+                    y=model_kwargs['y'][None],
+                    eps_btz=1,
+                    sigma=0.0,  # we don't use the random noise inside f
+                )
+                fscore, _ = grads
+
+                if dmode == 'eps+f':
+                    xd += sigma ** 2 / 2 * fscore
+                elif dmode == '2divide':
+                    xd += (sigma ** 2 / 2 * fscore + (x0 - xd) / 2)
+                elif dmode == '3steps':
+                    xd += (sigma ** 2 / 2 * fscore)
+
+            out["pred_xstart"] = xd
+            out['logprob'] = logprob
+
+        else:
+            raise NotImplementedError(model_kwargs['guide_mode'])
 
 
         out["mean"], _, _ = self.q_posterior_mean_variance(
@@ -742,7 +720,7 @@ class GaussianDiffusion:
         model_kwargs['shrink_cond_x0'] = shrink_cond_x0
         model_kwargs['score_norm'] = score_norm
 
-        for _ in range(recurrent):
+        for rec in range(recurrent):
             out = self.p_mean_variance(
                 model,
                 x,
@@ -754,7 +732,10 @@ class GaussianDiffusion:
             out['xt'] = x.clone()
 
             if cond_fn is not None:
+                if 'dynamic' in model_kwargs['guide_mode']:
+                    assert iteration == 1, "Dynamic mode does not support multiple iterations through --iteration"
                 for _ in range(iteration):
+                    model_kwargs['recurrent'] = rec
                     out = self.condition_score(cond_fn, out, x, t, model=model, model_kwargs=model_kwargs)
                     x = out['xt']
             eps = out['eps']
